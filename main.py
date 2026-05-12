@@ -1,31 +1,29 @@
 import os
 import time
 import asyncio
-from datetime import datetime, timedelta
-
 import pandas as pd
 import yfinance as yf
 
 from telegram import Bot
 
-# ============================================
-# TELEGRAM SETTINGS
-# ============================================
+# =========================
+# TELEGRAM CONFIG
+# =========================
 
-BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
-CHAT_ID = os.getenv("CHAT_ID", "").strip()
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+CHAT_ID = os.getenv("CHAT_ID")
 
 if not BOT_TOKEN:
-    raise Exception("BOT_TOKEN not found in Railway Variables")
+    raise Exception("BOT_TOKEN missing")
 
 if not CHAT_ID:
-    raise Exception("CHAT_ID not found in Railway Variables")
+    raise Exception("CHAT_ID missing")
 
 bot = Bot(token=BOT_TOKEN)
 
-# ============================================
+# =========================
 # OTC PAIRS ONLY
-# ============================================
+# =========================
 
 PAIRS = [
     "USDBRL=X",
@@ -33,120 +31,93 @@ PAIRS = [
     "USDMXN=X"
 ]
 
-# ============================================
-# SEND TELEGRAM MESSAGE
-# ============================================
+# =========================
+# TELEGRAM SEND
+# =========================
 
-async def send_telegram_message(message):
+async def send_signal(text):
     try:
-        await bot.send_message(
-            chat_id=CHAT_ID,
-            text=message
-        )
-        print("Signal sent successfully")
-
+        await bot.send_message(chat_id=CHAT_ID, text=text)
+        print("Telegram message sent")
     except Exception as e:
-        print("Telegram Error:", e)
+        print("TELEGRAM ERROR:", e)
 
-# ============================================
-# SIGNAL GENERATOR
-# ============================================
+# =========================
+# SIGNAL LOGIC
+# =========================
 
-def generate_signal(symbol):
+def get_signal(symbol):
 
     try:
-        print(f"Scanning: {symbol}")
-
-        df = yf.download(
+        data = yf.download(
             symbol,
             period="1d",
             interval="1m",
             progress=False
         )
 
-        if df.empty or len(df) < 30:
+        if data.empty:
+            print("No data:", symbol)
             return None
 
-        # CLOSE PRICE
-        close = df["Close"].astype(float)
+        close = data["Close"]
 
-        current_price = float(close.iloc[-1])
+        # FIX FOR SERIES ERROR
+        if isinstance(close, pd.DataFrame):
+            close = close.iloc[:, 0]
 
-        # EMA STRATEGY
-        ema_fast = close.ewm(span=5).mean()
-        ema_slow = close.ewm(span=13).mean()
+        close = close.dropna()
 
-        fast_now = float(ema_fast.iloc[-1])
-        slow_now = float(ema_slow.iloc[-1])
-
-        # SIGNAL TYPE
-        if fast_now > slow_now:
-            signal = "BUY"
-
-        elif fast_now < slow_now:
-            signal = "SELL"
-
-        else:
+        if len(close) < 20:
             return None
 
-        # TIME
-        now = datetime.utcnow()
+        price = float(close.iloc[-1])
 
-        next_candle = (now + timedelta(minutes=1)).replace(
-            second=0,
-            microsecond=0
-        )
+        sma5 = float(close.tail(5).mean())
+        sma10 = float(close.tail(10).mean())
 
-        signal_time = next_candle - timedelta(seconds=10)
+        # SIMPLE SIGNALS
+        if sma5 > sma10:
+            return f"🟢 BUY SIGNAL\n\nPair: {symbol}\nPrice: {price}"
 
-        entry_time = next_candle.strftime("%H:%M")
-        exit_time = (next_candle + timedelta(minutes=1)).strftime("%H:%M")
+        elif sma5 < sma10:
+            return f"🔴 SELL SIGNAL\n\nPair: {symbol}\nPrice: {price}"
 
-        # MESSAGE
-        message = f"""
-🔥 AI OTC SIGNAL 🔥
-
-PAIR: {symbol.replace('=X', '')}
-SIGNAL: {signal}
-
-SIGNAL TIME: {signal_time.strftime('%H:%M:%S')} UTC
-ENTRY TIME: {entry_time} UTC
-EXIT TIME: {exit_time} UTC
-
-PRICE: {round(current_price, 5)}
-"""
-
-        return message
+        return None
 
     except Exception as e:
         print("SIGNAL ERROR:", e)
         return None
 
-# ============================================
+# =========================
 # MAIN LOOP
-# ============================================
+# =========================
 
 async def main():
 
     print("AI SIGNAL BOT STARTED")
 
+    # TEST MESSAGE
+    await send_signal("✅ BOT CONNECTED SUCCESSFULLY")
+
     while True:
 
         for pair in PAIRS:
 
-            signal = generate_signal(pair)
+            print("Scanning:", pair)
+
+            signal = get_signal(pair)
 
             if signal:
-                await send_telegram_message(signal)
+                await send_signal(signal)
 
             await asyncio.sleep(5)
 
         print("Waiting next cycle...")
-        await asyncio.sleep(30)
+        await asyncio.sleep(60)
 
-# ============================================
+# =========================
 # START BOT
-# ============================================
+# =========================
 
-if __name__ == "__main__":
-    asyncio.run(main())
+asyncio.run(main())
