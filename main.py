@@ -18,8 +18,10 @@ BOT_TOKEN = "8689634513:AAFm5KBhu2pPnwcwPnTyvS8C1BAUS9YIK7Q"
 CHAT_ID = "5974354691"
 
 # =========================================
-# OTC PAIRS
+# MARKET SETTINGS
 # =========================================
+
+TIMEFRAME = "1m"
 
 PAIRS = [
     "EURUSD=X",
@@ -29,16 +31,14 @@ PAIRS = [
     "EURJPY=X"
 ]
 
-TIMEFRAME = "1m"
-
 # =========================================
-# TRACKING
+# BOT STATS
 # =========================================
 
+signals_sent = 0
 wins = 0
 losses = 0
-signals_sent = 0
-last_signal = "Waiting..."
+last_signal = "No signal yet"
 
 # =========================================
 # FLASK DASHBOARD
@@ -47,11 +47,11 @@ last_signal = "Waiting..."
 app = Flask(__name__)
 
 @app.route("/")
-def home():
+def dashboard():
 
     accuracy = 0
 
-    if wins + losses > 0:
+    if (wins + losses) > 0:
         accuracy = round((wins / (wins + losses)) * 100, 2)
 
     return f"""
@@ -92,7 +92,9 @@ def send_telegram(message):
     }
 
     try:
-        requests.post(url, data=data)
+        response = requests.post(url, data=data)
+
+        print("Telegram sent:", response.status_code)
 
     except Exception as e:
         print("Telegram Error:", e)
@@ -103,30 +105,30 @@ def send_telegram(message):
 
 def detect_pattern(df):
 
-    open_price = df["Open"].iloc[-1]
-    close_price = df["Close"].iloc[-1]
-    high = df["High"].iloc[-1]
-    low = df["Low"].iloc[-1]
+    open_price = float(df["Open"].iloc[-1])
+    close_price = float(df["Close"].iloc[-1])
+    high_price = float(df["High"].iloc[-1])
+    low_price = float(df["Low"].iloc[-1])
 
     body = abs(close_price - open_price)
-    candle_range = high - low
+    candle_range = high_price - low_price
 
-    # Doji
+    # DOJI
     if body < candle_range * 0.1:
-        return "Doji"
+        return "DOJI"
 
-    # Bullish candle
+    # BULLISH
     if close_price > open_price:
-        return "Bullish"
+        return "BULLISH"
 
-    # Bearish candle
+    # BEARISH
     if close_price < open_price:
-        return "Bearish"
+        return "BEARISH"
 
-    return "Neutral"
+    return "NEUTRAL"
 
 # =========================================
-# AI ANALYSIS
+# MARKET ANALYSIS
 # =========================================
 
 def analyze_market(symbol):
@@ -148,29 +150,37 @@ def analyze_market(symbol):
 
         close = df["Close"].squeeze()
 
+        # INDICATORS
         rsi = RSIIndicator(close, window=7).rsi()
 
-        macd = MACD(close)
+        macd_indicator = MACD(close)
+
+        macd_line = macd_indicator.macd()
+
+        signal_line = macd_indicator.macd_signal()
 
         ema = EMAIndicator(close, window=20).ema_indicator()
 
-        latest_close = close.iloc[-1]
+        # LATEST VALUES
+        latest_close = float(close.iloc[-1])
 
-        latest_rsi = rsi.iloc[-1]
+        latest_rsi = float(rsi.iloc[-1])
 
-        latest_macd = macd.macd().iloc[-1]
+        latest_macd = float(macd_line.iloc[-1])
 
-        latest_signal = macd.macd_signal().iloc[-1]
+        latest_signal = float(signal_line.iloc[-1])
 
-        latest_ema = ema.iloc[-1]
+        latest_ema = float(ema.iloc[-1])
 
+        # PATTERN
         pattern = detect_pattern(df)
 
+        # AI CONFIDENCE
         confidence = np.random.randint(82, 98)
 
-        # BUY
+        # BUY SIGNAL
         if (
-            latest_rsi < 45 and
+            latest_rsi < 50 and
             latest_macd > latest_signal and
             latest_close > latest_ema
         ):
@@ -181,22 +191,23 @@ def analyze_market(symbol):
 🟢 QUOTEX OTC BUY SIGNAL
 
 PAIR: {symbol}
+
 TIMEFRAME: 1 MINUTE
 
 PATTERN: {pattern}
 
 AI CONFIDENCE: {confidence}%
 
-RSI: {latest_rsi:.2f}
+RSI: {round(latest_rsi, 2)}
 
-PREDICTION: UP ⬆️
+TREND: BULLISH ⬆️
 
 EXPIRY: 2 MINUTES
 """
 
-        # SELL
+        # SELL SIGNAL
         elif (
-            latest_rsi > 55 and
+            latest_rsi > 50 and
             latest_macd < latest_signal and
             latest_close < latest_ema
         ):
@@ -207,30 +218,34 @@ EXPIRY: 2 MINUTES
 🔴 QUOTEX OTC SELL SIGNAL
 
 PAIR: {symbol}
+
 TIMEFRAME: 1 MINUTE
 
 PATTERN: {pattern}
 
 AI CONFIDENCE: {confidence}%
 
-RSI: {latest_rsi:.2f}
+RSI: {round(latest_rsi, 2)}
 
-PREDICTION: DOWN ⬇️
+TREND: BEARISH ⬇️
 
 EXPIRY: 2 MINUTES
 """
 
         else:
+
             losses += 1
+
+            return None
 
     except Exception as e:
 
-        return f"ERROR: {e}"
+        print("Analysis Error:", e)
 
-    return None
+        return None
 
 # =========================================
-# SIGNAL LOOP
+# BOT LOOP
 # =========================================
 
 def bot_loop():
@@ -241,18 +256,18 @@ def bot_loop():
 
         for pair in PAIRS:
 
+            print(f"Scanning {pair}")
+
             signal = analyze_market(pair)
 
             if signal:
                 send_telegram(signal)
 
-            print(f"Scanning {pair}")
-
-        # EVERY 2 MINUTES
+        # FAST OTC SCAN
         time.sleep(30)
 
 # =========================================
-# START EVERYTHING
+# START BOT
 # =========================================
 
 threading.Thread(target=bot_loop).start()
