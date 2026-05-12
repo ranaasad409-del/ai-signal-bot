@@ -1,110 +1,53 @@
-import time
-import requests
-import pandas as pd
 import yfinance as yf
-from ta.trend import EMAIndicator
+import pandas as pd
 from ta.momentum import RSIIndicator
+from ta.trend import MACD
+import time
 
-PAIRS = [
-    "EURUSD=X",
-    "GBPUSD=X",
-    "USDJPY=X",
-    "USDCHF=X",
-    "AUDUSD=X",
-    "USDCAD=X"
-]
-
-TIMEFRAME = "1m"
-
-def get_data(symbol):
+def analyze_market(symbol="EURUSD=X"):
     try:
-        df = yf.download(
-            tickers=symbol,
-            period="1d",
-            interval=TIMEFRAME,
-            progress=False,
-            auto_adjust=True
-        )
+        df = yf.download(symbol, period="1d", interval="5m")
 
         if df.empty:
-            return None
+            print("No market data found")
+            return
 
-        return df
+        # Fix dataframe issue
+        close = df["Close"].squeeze()
+
+        # Indicators
+        rsi = RSIIndicator(close=close, window=14).rsi()
+
+        macd_indicator = MACD(close=close)
+        macd_line = macd_indicator.macd()
+        signal_line = macd_indicator.macd_signal()
+
+        latest_price = close.iloc[-1]
+        latest_rsi = rsi.iloc[-1]
+        latest_macd = macd_line.iloc[-1]
+        latest_signal = signal_line.iloc[-1]
+
+        print("\n========================")
+        print(" AI SIGNAL BOT ")
+        print("========================")
+        print(f"Symbol: {symbol}")
+        print(f"Current Price: {latest_price}")
+        print(f"RSI: {latest_rsi:.2f}")
+        print(f"MACD: {latest_macd:.5f}")
+        print(f"Signal Line: {latest_signal:.5f}")
+
+        # Signal Logic
+        if latest_rsi < 30 and latest_macd > latest_signal:
+            print(">>> BUY SIGNAL")
+        elif latest_rsi > 70 and latest_macd < latest_signal:
+            print(">>> SELL SIGNAL")
+        else:
+            print(">>> NO CLEAR SIGNAL")
 
     except Exception as e:
-        print(f"Error for {symbol}: {e}")
-        return None
+        print("Error:", e)
 
-def analyze_market(df):
-    close = df["Close"]
-
-    rsi = RSIIndicator(close, window=14).rsi()
-    ema_fast = EMAIndicator(close, window=9).ema_indicator()
-    ema_slow = EMAIndicator(close, window=21).ema_indicator()
-
-    latest_rsi = float(rsi.iloc[-1])
-    latest_fast = float(ema_fast.iloc[-1])
-    latest_slow = float(ema_slow.iloc[-1])
-
-    signal = None
-    confidence = 0
-
-    if latest_fast > latest_slow and latest_rsi < 70:
-        signal = "BUY"
-        confidence = 88
-
-    elif latest_fast < latest_slow and latest_rsi > 30:
-        signal = "SELL"
-        confidence = 88
-
-    return {
-        "signal": signal,
-        "confidence": confidence,
-        "rsi": round(latest_rsi, 2),
-        "ema_fast": round(latest_fast, 5),
-        "ema_slow": round(latest_slow, 5)
-    }
-
-print("🚀 REAL ANALYSIS SIGNAL BOT STARTED")
-
+# Run continuously
 while True:
-    print("\n📡 Scanning Market 24/7")
-    print("🔎 Scanning market...")
-
-    found = False
-
-    for pair in PAIRS:
-        df = get_data(pair)
-
-        if df is None:
-            continue
-
-        result = analyze_market(df)
-
-        if result["signal"]:
-
-            otc_pair = pair.replace("=X", "").replace("USD", "USD/")
-
-            print("\n📊 AI OTC SIGNAL")
-            print(f"\n💱 Pair: {otc_pair} OTC")
-            print(f"⏰ Entry Time: LIVE")
-            print(f"📈 Signal: {result['signal']}")
-            print("🕐 Time Frame: 1 Minute")
-            print(f"🔥 Confidence: {result['confidence']}%")
-
-            print("\n========== STRATEGY ==========")
-            print(f"\nRSI: {result['rsi']}")
-            print(f"EMA FAST: {result['ema_fast']}")
-            print(f"EMA SLOW: {result['ema_slow']}")
-
-            print("\n⏳ TAKE ENTRY NOW")
-            print("\n⌛ Waiting 1 minute for result...")
-
-            found = True
-
-            time.sleep(60)
-
-    if not found:
-        print("\n⌛ Waiting for strong setup...")
-
-    time.sleep(10)
+    analyze_market()
+    time.sleep(300)  # 5 minutes
