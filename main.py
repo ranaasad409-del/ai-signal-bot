@@ -1,5 +1,5 @@
 # =========================================================
-# AI OTC SIGNAL BOT — FINAL PROFESSIONAL VERSION
+# AI OTC SIGNAL BOT — FINAL STABLE VERSION
 # =========================================================
 
 import os
@@ -55,6 +55,7 @@ PAIRS = [
     "BRL=X",
     "MXN=X",
     "PKR=X"
+
 ]
 
 # =========================================================
@@ -100,11 +101,13 @@ conn.commit()
 # START MESSAGE
 # =========================================================
 
-bot.send_message(
+try:
 
-    chat_id=CHAT_ID,
+    bot.send_message(
 
-    text="""
+        chat_id=CHAT_ID,
+
+        text="""
 ✅ AI OTC SIGNAL BOT STARTED
 
 📡 LIVE OTC SCANNING ENABLED
@@ -115,7 +118,11 @@ bot.send_message(
 📈 REAL-TIME SIGNAL ENGINE READY
 """
 
-)
+    )
+
+except Exception as e:
+
+    print("Telegram Error:", e)
 
 # =========================================================
 # GET DATA
@@ -141,7 +148,10 @@ def get_data(pair):
 
         return df
 
-    except:
+    except Exception as e:
+
+        print("DATA ERROR:", e)
+
         return None
 
 # =========================================================
@@ -180,7 +190,7 @@ def add_indicators(df):
     return df
 
 # =========================================================
-# CANDLE PATTERN
+# CANDLESTICK PATTERN
 # =========================================================
 
 def detect_pattern(df):
@@ -217,19 +227,18 @@ def detect_pattern(df):
         ):
             return "SHOOTING_STAR"
 
-        # BULLISH
-
         if close_price > open_price:
             return "BULLISH"
-
-        # BEARISH
 
         if close_price < open_price:
             return "BEARISH"
 
         return "NONE"
 
-    except:
+    except Exception as e:
+
+        print("PATTERN ERROR:", e)
+
         return "NONE"
 
 # =========================================================
@@ -296,7 +305,7 @@ def create_chart(df, pair):
         if not MPF_AVAILABLE:
             return None
 
-        file_name = f"{pair}.png"
+        filename = f"{pair}.png"
 
         mpf.plot(
 
@@ -304,11 +313,11 @@ def create_chart(df, pair):
             type="candle",
             style="charles",
             volume=False,
-            savefig=file_name
+            savefig=filename
 
         )
 
-        return file_name
+        return filename
 
     except Exception as e:
 
@@ -317,7 +326,7 @@ def create_chart(df, pair):
         return None
 
 # =========================================================
-# SAVE DATABASE
+# SAVE SIGNAL
 # =========================================================
 
 def save_signal(
@@ -331,22 +340,28 @@ def save_signal(
 
 ):
 
-    cursor.execute("""
+    try:
 
-    INSERT INTO signals VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
+        cursor.execute("""
 
-    """, (
+        INSERT INTO signals VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
 
-        pair,
-        signal,
-        confidence,
-        result,
-        entry_price,
-        close_price
+        """, (
 
-    ))
+            pair,
+            signal,
+            confidence,
+            result,
+            entry_price,
+            close_price
 
-    conn.commit()
+        ))
+
+        conn.commit()
+
+    except Exception as e:
+
+        print("DATABASE ERROR:", e)
 
 # =========================================================
 # ANALYZE MARKET
@@ -430,21 +445,15 @@ def analyze(pair):
 
         # =================================================
         # PERFECT ENTRY TIMING
-        # SIGNAL AT XX:50
-        # ENTRY AT NEXT CANDLE
         # =================================================
 
-        now = time.localtime()
+        current_seconds = time.localtime().tm_sec
 
-        seconds = now.tm_sec
+        if current_seconds < 50:
 
-        if seconds < 50:
+            wait_time = 50 - current_seconds
 
-            wait_time = 50 - seconds
-
-            print(
-                f"Waiting {wait_time} sec for exact signal timing..."
-            )
+            print(f"Waiting {wait_time} sec...")
 
             time.sleep(wait_time)
 
@@ -477,22 +486,20 @@ def analyze(pair):
 
 📉 RSI: {rsi}
 
-💰 CURRENT PRICE: {current_price}
+💰 PRICE: {current_price}
 
 🚨 SIGNAL TIME: {signal_time}
 
 ⏰ ENTRY TIME: {entry_time}
 
-⌛ TRADE DURATION: 1 MINUTE
+⌛ DURATION: 1 MINUTE
 
 ⚡ ENTER EXACTLY ON NEXT CANDLE
 """
 
         bot.send_message(
-
             chat_id=CHAT_ID,
             text=message
-
         )
 
         print("Signal Sent")
@@ -516,11 +523,10 @@ def analyze(pair):
         # WAIT FOR ENTRY
         # =================================================
 
-        current_seconds = time.localtime().tm_sec
+        seconds = time.localtime().tm_sec
 
-        if current_seconds < 60:
-
-            time.sleep(60 - current_seconds)
+        if seconds < 60:
+            time.sleep(60 - seconds)
 
         # =================================================
         # ENTRY PRICE
@@ -532,10 +538,8 @@ def analyze(pair):
             return
 
         entry_price = round(
-
             float(entry_df.iloc[-1]["Close"]),
             5
-
         )
 
         print("Trade Started")
@@ -547,3 +551,105 @@ def analyze(pair):
         time.sleep(60)
 
         # =================================================
+        # CLOSE PRICE
+        # =================================================
+
+        result_df = get_data(pair)
+
+        if result_df is None:
+            return
+
+        close_price = round(
+            float(result_df.iloc[-1]["Close"]),
+            5
+        )
+
+        # =================================================
+        # RESULT
+        # =================================================
+
+        result = "LOSS"
+
+        if (
+            signal == "BUY" and
+            close_price > entry_price
+        ):
+
+            result = "WIN"
+
+        elif (
+            signal == "SELL" and
+            close_price < entry_price
+        ):
+
+            result = "WIN"
+
+        # =================================================
+        # SAVE HISTORY
+        # =================================================
+
+        save_signal(
+
+            pair,
+            signal,
+            confidence,
+            result,
+            entry_price,
+            close_price
+
+        )
+
+        # =================================================
+        # SEND RESULT
+        # =================================================
+
+        result_message = f"""
+📋 TRADE CLOSED
+
+💱 PAIR: {pair.replace("=X", "")}
+
+📈 SIGNAL: {signal}
+
+💰 ENTRY: {entry_price}
+
+💵 CLOSE: {close_price}
+
+🏆 RESULT: {result}
+
+⌛ CLOSED AFTER 1 MINUTE
+"""
+
+        bot.send_message(
+
+            chat_id=CHAT_ID,
+            text=result_message
+
+        )
+
+        print("Trade Completed")
+
+    except Exception as e:
+
+        print("ANALYZE ERROR:", e)
+
+# =========================================================
+# MAIN LOOP
+# =========================================================
+
+while True:
+
+    try:
+
+        for pair in PAIRS:
+
+            analyze(pair)
+
+        print("Waiting 20 seconds...")
+
+        time.sleep(SCAN_INTERVAL)
+
+    except Exception as e:
+
+        print("MAIN LOOP ERROR:", e)
+
+        time.sleep(10)
