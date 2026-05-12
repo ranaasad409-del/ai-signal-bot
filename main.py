@@ -1,163 +1,312 @@
 import os
 import time
+import asyncio
+import nest_asyncio
+
 from datetime import datetime, timedelta
 
 import pandas as pd
-import yfinance as yf
+
 from telegram import Bot
 
-# ============================================
-# TELEGRAM CONFIG
-# ============================================
+from pyquotex.stable_api import Quotex
+
+nest_asyncio.apply()
+
+# ======================================================
+# TELEGRAM
+# ======================================================
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 
 bot = Bot(token=BOT_TOKEN)
 
-# ============================================
-# PAIRS
-# ============================================
+# ======================================================
+# QUOTEX LOGIN
+# ======================================================
+
+QUOTEX_EMAIL = os.getenv("QUOTEX_EMAIL")
+QUOTEX_PASSWORD = os.getenv("QUOTEX_PASSWORD")
+
+client = Quotex(
+    email=QUOTEX_EMAIL,
+    password=QUOTEX_PASSWORD
+)
+
+# ======================================================
+# OTC PAIRS
+# ======================================================
 
 PAIRS = [
-    "USDBRL=X",
-    "USDPKR=X",
-    "USDMXN=X",
-    "CADCHF=X",
-    "EURUSD=X",
-    "GBPUSD=X",
-    "USDJPY=X",
+    "USDBRL_otc",
+    "USDPKR_otc",
+    "USDMXN_otc",
+    "CADCHF_otc",
+    "EURUSD_otc",
+    "GBPUSD_otc",
+    "USDJPY_otc"
 ]
 
-# ============================================
-# STATS
-# ============================================
+# ======================================================
+# GLOBAL STATS
+# ======================================================
 
-wins = 0
-losses = 0
+total_signals = 0
+total_wins = 0
+total_losses = 0
 
-# ============================================
-# SEND TELEGRAM MESSAGE
-# ============================================
+# ======================================================
+# TELEGRAM SEND
+# ======================================================
 
 async def send_message(text):
-    try:
-        await bot.send_message(chat_id=CHAT_ID, text=text)
-    except Exception as e:
-        print("TELEGRAM ERROR:", e)
-
-# ============================================
-# SIGNAL GENERATOR
-# ============================================
-
-async def check_signal(pair):
-    global wins, losses
 
     try:
-        print(f"Checking {pair}")
 
-        data = yf.download(
-            pair,
-            period="1d",
-            interval="1m",
-            progress=False
+        await bot.send_message(
+            chat_id=CHAT_ID,
+            text=text
         )
 
-        if data.empty:
-            return
+    except Exception as e:
 
-        close = data["Close"]
+        print("TELEGRAM ERROR:", e)
+
+# ======================================================
+# RSI
+# ======================================================
+
+def calculate_rsi(close, period=14):
+
+    delta = close.diff()
+
+    gain = delta.where(delta > 0, 0)
+    loss = -delta.where(delta < 0, 0)
+
+    avg_gain = gain.rolling(period).mean()
+    avg_loss = loss.rolling(period).mean()
+
+    rs = avg_gain / avg_loss
+
+    rsi = 100 - (100 / (1 + rs))
+
+    return rsi
+
+# ======================================================
+# GET OTC SIGNAL
+# ======================================================
+
+def get_signal(pair):
+
+    try:
+
+        candles = client.get_candles(
+            pair,
+            60,
+            100
+        )
+
+        if candles is None:
+            return None
+
+        df = pd.DataFrame(candles)
+
+        if df.empty:
+            return None
+
+        close = df["close"].astype(float)
 
         if len(close) < 30:
-            return
+            return None
 
-        # ============================================
+        # ==========================================
         # INDICATORS
-        # ============================================
+        # ==========================================
 
         ema9 = close.ewm(span=9).mean()
         ema21 = close.ewm(span=21).mean()
 
-        delta = close.diff()
+        rsi = calculate_rsi(close)
 
-        gain = delta.where(delta > 0, 0)
-        loss = -delta.where(delta < 0, 0)
+        current_price = close.iloc[-1]
 
-        avg_gain = gain.rolling(14).mean()
-        avg_loss = loss.rolling(14).mean()
+        latest_ema9 = ema9.iloc[-1]
+        latest_ema21 = ema21.iloc[-1]
 
-        rs = avg_gain / avg_loss
+        latest_rsi = rsi.iloc[-1]
 
-        rsi = 100 - (100 / (1 + rs))
-
-        # ============================================
-        # SAFE FLOAT VALUES
-        # ============================================
-
-        current_price = close.iloc[-1].item()
-
-        last_candle = close.iloc[-1].item()
-        prev_candle = close.iloc[-2].item()
-
-        latest_rsi = rsi.iloc[-1].item()
-
-        latest_ema9 = ema9.iloc[-1].item()
-        latest_ema21 = ema21.iloc[-1].item()
-
-        # ============================================
-        # SIGNAL LOGIC
-        # ============================================
+        previous_close = close.iloc[-2]
 
         signal = None
 
+        # ==========================================
         # BUY
+        # ==========================================
+
         if (
             latest_ema9 > latest_ema21
-            and latest_rsi < 70
-            and last_candle > prev_candle
+            and latest_rsi > 55
+            and current_price > previous_close
         ):
+
             signal = "BUY"
 
+        # ==========================================
         # SELL
+        # ==========================================
+
         elif (
             latest_ema9 < latest_ema21
-            and latest_rsi > 30
-            and last_candle < prev_candle
+            and latest_rsi < 45
+            and current_price < previous_close
         ):
+
             signal = "SELL"
 
         if signal is None:
+            return None
+
+        return {
+            "signal": signal,
+            "price": float(current_price)
+        }
+
+    except Exception as e:
+
+        print("SIGNAL ERROR:", e)
+
+        return None
+
+# ======================================================
+# RESULT CHECKER
+# ======================================================
+
+async def check_result(pair, signal, entry_price):
+
+    global total_signals
+    global total_wins
+    global total_losses
+
+    try:
+
+        await asyncio.sleep(60)
+
+        candles = client.get_candles(
+            pair,
+            60,
+            5
+        )
+
+        if candles is None:
             return
 
-        # ============================================
-        # TIME
-        # ============================================
+        df = pd.DataFrame(candles)
 
-        now = datetime.now()
+        close_price = float(df["close"].iloc[-1])
 
-        signal_time = now.strftime("%H:%M:%S")
+        result = "LOSS"
 
-        entry_time_dt = (now + timedelta(seconds=10)).replace(second=0)
+        if signal == "BUY":
 
-        exit_time_dt = entry_time_dt + timedelta(minutes=1)
+            if close_price > entry_price:
+                result = "WIN"
 
-        entry_time = entry_time_dt.strftime("%H:%M:%S")
-        exit_time = exit_time_dt.strftime("%H:%M:%S")
+        elif signal == "SELL":
 
-        # ============================================
-        # SEND SIGNAL
-        # ============================================
+            if close_price < entry_price:
+                result = "WIN"
 
-        message = f"""
+        # ==========================================
+        # STATS
+        # ==========================================
+
+        total_signals += 1
+
+        if result == "WIN":
+            total_wins += 1
+        else:
+            total_losses += 1
+
+        accuracy = round(
+            (total_wins / total_signals) * 100,
+            2
+        )
+
+        result_message = f"""
+🏁 TRADE RESULT
+
+📊 Pair: {pair}
+
+📈 Signal: {signal}
+
+💰 Entry Price: {round(entry_price,5)}
+
+💰 Close Price: {round(close_price,5)}
+
+{"✅ THIS TRADE = WIN 1" if result == "WIN" else "❌ THIS TRADE = LOSS 0"}
+
+━━━━━━━━━━━━━━━
+
+📡 TOTAL SIGNALS: {total_signals}
+
+✅ WINS: {total_wins}
+
+❌ LOSSES: {total_losses}
+
+🎯 ACCURACY: {accuracy}%
+"""
+
+        await send_message(result_message)
+
+    except Exception as e:
+
+        print("RESULT ERROR:", e)
+
+# ======================================================
+# SEND SIGNAL
+# ======================================================
+
+async def send_signal(pair, signal_data):
+
+    signal = signal_data["signal"]
+
+    price = signal_data["price"]
+
+    now = datetime.now()
+
+    signal_time = now.strftime("%H:%M:%S")
+
+    # ==========================================
+    # ENTRY / EXIT
+    # ==========================================
+
+    entry_time_obj = (
+        now + timedelta(minutes=1)
+    ).replace(second=0, microsecond=0)
+
+    signal_send_time = entry_time_obj - timedelta(seconds=10)
+
+    exit_time_obj = entry_time_obj + timedelta(minutes=1)
+
+    entry_time = entry_time_obj.strftime("%H:%M:%S")
+
+    exit_time = exit_time_obj.strftime("%H:%M:%S")
+
+    # ==========================================
+    # SIGNAL MESSAGE
+    # ==========================================
+
+    message = f"""
 🔥 QUOTEX OTC SIGNAL 🔥
 
-📊 Pair: {pair.replace("=X", "")} OTC
+📊 Pair: {pair}
 
-💰 Price: {round(current_price, 5)}
+💰 Price: {round(price,5)}
 
 {"🟢 BUY SIGNAL" if signal == "BUY" else "🔴 SELL SIGNAL"}
 
-⏰ Signal Time: {signal_time}
+⏰ Signal Time: {signal_send_time.strftime("%H:%M:%S")}
 
 🎯 Entry Time: {entry_time}
 
@@ -166,113 +315,85 @@ async def check_signal(pair):
 🕐 Expiry: 1 Minute
 """
 
-        await send_message(message)
+    await send_message(message)
 
-        # ============================================
-        # WAIT FOR RESULT
-        # ============================================
-
-        wait_seconds = (
-            exit_time_dt - datetime.now()
-        ).total_seconds()
-
-        if wait_seconds > 0:
-            time.sleep(wait_seconds)
-
-        # ============================================
-        # CHECK RESULT
-        # ============================================
-
-        result_data = yf.download(
+    asyncio.create_task(
+        check_result(
             pair,
-            period="1d",
-            interval="1m",
-            progress=False
+            signal,
+            price
         )
+    )
 
-        if result_data.empty:
-            return
-
-        close_price = result_data["Close"].iloc[-1].item()
-
-        result = "LOSS"
-
-        if signal == "BUY" and close_price > current_price:
-            result = "WIN"
-
-        elif signal == "SELL" and close_price < current_price:
-            result = "WIN"
-
-        # ============================================
-        # STATS
-        # ============================================
-
-        if result == "WIN":
-            wins += 1
-        else:
-            losses += 1
-
-        total = wins + losses
-
-        accuracy = 0
-
-        if total > 0:
-            accuracy = round((wins / total) * 100, 2)
-
-        # ============================================
-        # SEND RESULT
-        # ============================================
-
-        result_message = f"""
-📈 SIGNAL RESULT
-
-📊 Pair: {pair.replace("=X", "")}
-
-{"✅ WIN = 1" if result == "WIN" else "❌ LOSS = 0"}
-
-🏆 Wins: {wins}
-
-💀 Losses: {losses}
-
-🎯 Accuracy: {accuracy}%
-"""
-
-        await send_message(result_message)
-
-    except Exception as e:
-        print("SIGNAL ERROR:", e)
-
-# ============================================
+# ======================================================
 # MAIN LOOP
-# ============================================
+# ======================================================
 
 async def main():
-    print("AI SIGNAL BOT STARTED")
 
-    await send_message("✅ Quotex OTC Signal Bot Connected")
+    print("CONNECTING TO QUOTEX...")
+
+    connected = client.connect()
+
+    if not connected:
+
+        print("QUOTEX CONNECTION FAILED")
+
+        await send_message(
+            "❌ Quotex connection failed"
+        )
+
+        return
+
+    print("QUOTEX CONNECTED")
+
+    await send_message(
+        "✅ Quotex OTC Bot Connected"
+    )
 
     while True:
+
         try:
+
             current_second = datetime.now().second
 
-            # SEND SIGNALS AT :50
+            # ======================================
+            # SEND SIGNAL AT :50
+            # ======================================
+
             if current_second == 50:
 
+                print("SCANNING MARKET...")
+
                 for pair in PAIRS:
-                    await check_signal(pair)
+
+                    print(f"Checking {pair}")
+
+                    signal_data = get_signal(pair)
+
+                    if signal_data:
+
+                        await send_signal(
+                            pair,
+                            signal_data
+                        )
+
+                    await asyncio.sleep(2)
 
                 print("WAITING NEXT MINUTE...")
-                time.sleep(15)
 
-            time.sleep(1)
+                await asyncio.sleep(10)
+
+            await asyncio.sleep(1)
 
         except Exception as e:
+
             print("MAIN LOOP ERROR:", e)
-            time.sleep(5)
 
-# ============================================
+            await asyncio.sleep(5)
+
+# ======================================================
 # START
-# ============================================
+# ======================================================
 
-import asyncio
 asyncio.run(main())
