@@ -1,6 +1,6 @@
 python-telegram-bot==20.7
-pandas
-numpy
-websocket-client
-pyquotex
-nest_asyncio
+pandas==2.2.2
+numpy==1.26.4
+yfinance==0.2.40
+websocket-client==1.8.0
+requests==2.32.3
