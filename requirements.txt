@@ -1,12 +1,6 @@
-python-telegram-bot==21.6
-yfinance
+python-telegram-bot==20.7
 pandas
 numpy
-ta
-scikit-learn
-flask
-matplotlib
-mplfinance
-schedule
-requests
-joblib
+websocket-client
+pyquotex
+nest_asyncio
