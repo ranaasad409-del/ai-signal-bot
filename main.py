@@ -1,11 +1,16 @@
-import yfinance as yf
-import pandas as pd
-import numpy as np
-import requests
+# =========================================================
+# AI OTC SIGNAL BOT - FINAL PROFESSIONAL VERSION
+# =========================================================
+
+import os
+import time
 import sqlite3
 import threading
-import time
-import mplfinance as mpf
+import requests
+import numpy as np
+import pandas as pd
+import yfinance as yf
+import ta
 import matplotlib.pyplot as plt
 
 from flask import Flask
@@ -16,22 +21,31 @@ from ta.trend import MACD, EMAIndicator
 
 from sklearn.ensemble import RandomForestClassifier
 
-# =====================================================
+# =========================================================
+# SAFE MPLFINANCE IMPORT
+# =========================================================
+
+try:
+    import mplfinance as mpf
+except:
+    mpf = None
+
+# =========================================================
 # TELEGRAM SETTINGS
-# =====================================================
+# =========================================================
 
 BOT_TOKEN = "8689634513:AAFm5KBhu2pPnwcwPnTyvS8C1BAUS9YIK7Q"
 CHAT_ID = "5974354691"
 
-# =====================================================
-# FLASK DASHBOARD
-# =====================================================
+# =========================================================
+# FLASK APP
+# =========================================================
 
 app = Flask(__name__)
 
-# =====================================================
+# =========================================================
 # DATABASE
-# =====================================================
+# =========================================================
 
 conn = sqlite3.connect(
     "signals.db",
@@ -55,9 +69,9 @@ entry_time TEXT
 
 conn.commit()
 
-# =====================================================
-# PAIRS
-# =====================================================
+# =========================================================
+# OTC PAIRS
+# =========================================================
 
 PAIRS = [
     "EURUSD=X",
@@ -68,9 +82,9 @@ PAIRS = [
     "GBPJPY=X"
 ]
 
-# =====================================================
-# BOT STATS
-# =====================================================
+# =========================================================
+# STATS
+# =========================================================
 
 wins = 0
 losses = 0
@@ -78,11 +92,11 @@ total_signals = 0
 
 signal_history = {}
 
-# =====================================================
-# TELEGRAM FUNCTIONS
-# =====================================================
+# =========================================================
+# TELEGRAM SEND MESSAGE
+# =========================================================
 
-def send_telegram(text):
+def send_telegram(message):
 
     try:
 
@@ -90,7 +104,7 @@ def send_telegram(text):
 
         data = {
             "chat_id": CHAT_ID,
-            "text": text
+            "text": message
         }
 
         requests.post(url, data=data)
@@ -101,46 +115,72 @@ def send_telegram(text):
 
         print("Telegram Error:", e)
 
-# =====================================================
-# SEND CHART IMAGE
-# =====================================================
+# =========================================================
+# SEND IMAGE
+# =========================================================
 
-def send_chart(df, pair, signal_type):
+def send_image(path, caption=""):
 
     try:
 
-        chart_name = f"{pair}.png"
-
-        mpf.plot(
-            df.tail(50),
-            type='candle',
-            style='charles',
-            volume=False,
-            savefig=chart_name
-        )
-
         files = {
-            "photo": open(chart_name, "rb")
+            "photo": open(path, "rb")
         }
 
         requests.post(
             f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto",
             data={
                 "chat_id": CHAT_ID,
-                "caption": f"{pair} {signal_type}"
+                "caption": caption
             },
             files=files
         )
 
     except Exception as e:
 
+        print("Image Error:", e)
+
+# =========================================================
+# CREATE CHART
+# =========================================================
+
+def create_chart(df, pair, signal_type):
+
+    try:
+
+        if mpf is None:
+            return None
+
+        file_name = f"{pair}.png"
+
+        chart_data = df.tail(40).copy()
+
+        chart_data.index = pd.DatetimeIndex(
+            chart_data.index
+        )
+
+        mpf.plot(
+            chart_data,
+            type='candle',
+            style='charles',
+            title=f"{pair} OTC SIGNAL",
+            volume=False,
+            savefig=file_name
+        )
+
+        return file_name
+
+    except Exception as e:
+
         print("Chart Error:", e)
 
-# =====================================================
-# MACHINE LEARNING MODEL
-# =====================================================
+        return None
 
-def train_model(df):
+# =========================================================
+# MACHINE LEARNING MODEL
+# =========================================================
+
+def train_ai(df):
 
     try:
 
@@ -152,25 +192,25 @@ def train_model(df):
 
         df.dropna(inplace=True)
 
-        features = df[[
+        X = df[[
             "RSI",
             "MACD"
         ]]
 
-        target = df["target"]
+        y = df["target"]
 
         model = RandomForestClassifier(
             n_estimators=100
         )
 
-        model.fit(features, target)
+        model.fit(X, y)
 
         prediction = model.predict(
-            features.tail(1)
+            X.tail(1)
         )[0]
 
         probability = model.predict_proba(
-            features.tail(1)
+            X.tail(1)
         )[0]
 
         confidence = round(
@@ -182,13 +222,13 @@ def train_model(df):
 
     except Exception as e:
 
-        print("ML Error:", e)
+        print("AI Error:", e)
 
         return None, 0
 
-# =====================================================
-# RESULT CHECK
-# =====================================================
+# =========================================================
+# CHECK RESULT
+# =========================================================
 
 def check_result(
     pair,
@@ -247,7 +287,7 @@ def check_result(
             2
         )
 
-        # SAVE RESULT
+        # SAVE TO DATABASE
 
         cursor.execute("""
         INSERT INTO signals (
@@ -298,9 +338,9 @@ CLOSE PRICE: {round(close_price, 5)}
 
         print("Result Error:", e)
 
-# =====================================================
+# =========================================================
 # MARKET ANALYSIS
-# =====================================================
+# =========================================================
 
 def analyze_market(pair):
 
@@ -320,6 +360,10 @@ def analyze_market(pair):
         if df.empty or len(df) < 100:
             return
 
+        # =================================================
+        # FIX MULTI-DIMENSIONAL ERRORS
+        # =================================================
+
         close_prices = np.array(
             df["Close"]
         ).flatten()
@@ -328,9 +372,9 @@ def analyze_market(pair):
             close_prices
         )
 
-        # =========================================
+        # =================================================
         # INDICATORS
-        # =========================================
+        # =================================================
 
         rsi_indicator = RSIIndicator(
             close_series
@@ -353,24 +397,29 @@ def analyze_market(pair):
 
         ema = ema_indicator.ema_indicator()
 
-        # =========================================
-        # DATAFRAME
-        # =========================================
+        # =================================================
+        # ADD FEATURES
+        # =================================================
+
+        df = df.iloc[-len(rsi):].copy()
 
         df["RSI"] = rsi.values
         df["MACD"] = macd.values
 
         df.dropna(inplace=True)
 
-        # =========================================
-        # ML PREDICTION
-        # =========================================
+        # =================================================
+        # AI MODEL
+        # =================================================
 
-        prediction, confidence = train_model(df)
+        prediction, confidence = train_ai(df)
 
-        # =========================================
+        if prediction is None:
+            return
+
+        # =================================================
         # LAST VALUES
-        # =========================================
+        # =================================================
 
         last_close = float(
             close_prices[-1]
@@ -392,28 +441,34 @@ def analyze_market(pair):
             ema.iloc[-1]
         )
 
-        # =========================================
+        # =================================================
         # SIGNAL LOGIC
-        # =========================================
+        # =================================================
 
         signal_type = None
 
         trend = "SIDEWAYS"
 
+        # BUY SIGNAL
+
         if (
             prediction == 1
             and last_macd > last_macd_signal
             and last_close > last_ema
+            and last_rsi < 70
         ):
 
             signal_type = "BUY ✅"
 
             trend = "UPTREND 🚀"
 
+        # SELL SIGNAL
+
         elif (
             prediction == 0
             and last_macd < last_macd_signal
             and last_close < last_ema
+            and last_rsi > 30
         ):
 
             signal_type = "SELL 🔻"
@@ -423,9 +478,9 @@ def analyze_market(pair):
         if signal_type is None:
             return
 
-        # =========================================
+        # =================================================
         # DUPLICATE FILTER
-        # =========================================
+        # =================================================
 
         signal_key = f"{pair}_{signal_type}"
 
@@ -433,20 +488,20 @@ def analyze_market(pair):
 
         if signal_key in signal_history:
 
-            previous_time = signal_history[
+            old_time = signal_history[
                 signal_key
             ]
 
-            if current_time - previous_time < 120:
+            if current_time - old_time < 120:
                 return
 
         signal_history[
             signal_key
         ] = current_time
 
-        # =========================================
+        # =================================================
         # ENTRY / EXPIRY
-        # =========================================
+        # =================================================
 
         entry_time = datetime.now()
 
@@ -463,9 +518,9 @@ def analyze_market(pair):
             "%I:%M %p"
         )
 
-        # =========================================
-        # MESSAGE
-        # =========================================
+        # =================================================
+        # TELEGRAM MESSAGE
+        # =================================================
 
         message = f"""
 📊 AI OTC SIGNAL
@@ -493,17 +548,25 @@ PRICE: {round(last_close, 5)}
 
         send_telegram(message)
 
-        send_chart(
+        # =================================================
+        # SEND CHART
+        # =================================================
+
+        chart = create_chart(
             df,
             pair,
             signal_type
         )
 
-        print("Signal sent")
+        if chart:
+            send_image(
+                chart,
+                f"{pair} {signal_type}"
+            )
 
-        # =========================================
-        # RESULT CHECK
-        # =========================================
+        # =================================================
+        # RESULT THREAD
+        # =================================================
 
         threading.Thread(
             target=check_result,
@@ -514,13 +577,15 @@ PRICE: {round(last_close, 5)}
             )
         ).start()
 
+        print("Signal sent successfully")
+
     except Exception as e:
 
         print("ERROR:", e)
 
-# =====================================================
-# FLASK DASHBOARD ROUTE
-# =====================================================
+# =========================================================
+# DASHBOARD
+# =========================================================
 
 @app.route("/")
 
@@ -535,7 +600,7 @@ def dashboard():
             2
         )
 
-    html = f"""
+    return f"""
     <h1>AI OTC SIGNAL BOT</h1>
 
     <h2>LIVE STATS</h2>
@@ -551,22 +616,20 @@ def dashboard():
     <p>Scanner Running...</p>
     """
 
-    return html
+# =========================================================
+# START DASHBOARD
+# =========================================================
 
-# =====================================================
-# START FLASK
-# =====================================================
-
-def start_flask():
+def start_dashboard():
 
     app.run(
         host="0.0.0.0",
         port=5000
     )
 
-# =====================================================
+# =========================================================
 # STARTUP MESSAGE
-# =====================================================
+# =========================================================
 
 send_telegram("""
 🚀 AI OTC SIGNAL BOT STARTED
@@ -581,20 +644,20 @@ send_telegram("""
 
 📊 Dashboard Running
 
-🔥 AI Trading System Online
+🔥 Professional AI Trading System Online
 """)
 
-# =====================================================
-# START DASHBOARD THREAD
-# =====================================================
+# =========================================================
+# DASHBOARD THREAD
+# =========================================================
 
 threading.Thread(
-    target=start_flask
+    target=start_dashboard
 ).start()
 
-# =====================================================
+# =========================================================
 # MAIN LOOP
-# =====================================================
+# =========================================================
 
 while True:
 
