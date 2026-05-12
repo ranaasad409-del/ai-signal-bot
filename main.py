@@ -13,13 +13,23 @@ from telegram.constants import ParseMode
 warnings.filterwarnings("ignore")
 
 # =====================================================
-# CONFIG
+# TELEGRAM CONFIG
 # =====================================================
 
 BOT_TOKEN = os.getenv("8689634513:AAFm5KBhu2pPnwcwPnTyvS8C1BAUS9YIK7Q")
 CHAT_ID = os.getenv("5974354691")
 
+if not BOT_TOKEN:
+    raise Exception("BOT_TOKEN missing in Railway Variables")
+
+if not CHAT_ID:
+    raise Exception("CHAT_ID missing in Railway Variables")
+
 bot = Bot(token=BOT_TOKEN)
+
+# =====================================================
+# SETTINGS
+# =====================================================
 
 SCAN_INTERVAL = 30
 
@@ -36,7 +46,7 @@ PAIRS = [
 ]
 
 # =====================================================
-# TELEGRAM
+# TELEGRAM MESSAGE
 # =====================================================
 
 async def send_telegram_message(message):
@@ -56,7 +66,7 @@ async def send_telegram_message(message):
         print(f"Telegram Error: {e}")
 
 # =====================================================
-# DOWNLOAD DATA
+# GET MARKET DATA
 # =====================================================
 
 def get_data(pair):
@@ -72,6 +82,7 @@ def get_data(pair):
         )
 
         if df.empty:
+            print(f"No data for {pair}")
             return None
 
         df.dropna(inplace=True)
@@ -84,7 +95,7 @@ def get_data(pair):
         return None
 
 # =====================================================
-# PATTERN DETECTION
+# CANDLESTICK PATTERN
 # =====================================================
 
 def detect_pattern(df):
@@ -94,27 +105,27 @@ def detect_pattern(df):
         last = df.iloc[-1]
         prev = df.iloc[-2]
 
-        open_price = float(last["Open"])
-        close_price = float(last["Close"])
+        open1 = float(last["Open"])
+        close1 = float(last["Close"])
 
-        prev_open = float(prev["Open"])
-        prev_close = float(prev["Close"])
+        open2 = float(prev["Open"])
+        close2 = float(prev["Close"])
 
-        # Bullish engulfing
+        # Bullish Engulfing
         if (
-            close_price > open_price and
-            prev_close < prev_open and
-            close_price > prev_open and
-            open_price < prev_close
+            close1 > open1 and
+            close2 < open2 and
+            close1 > open2 and
+            open1 < close2
         ):
             return "BUY"
 
-        # Bearish engulfing
+        # Bearish Engulfing
         if (
-            close_price < open_price and
-            prev_close > prev_open and
-            close_price < prev_open and
-            open_price > prev_close
+            close1 < open1 and
+            close2 > open2 and
+            close1 < open2 and
+            open1 > close2
         ):
             return "SELL"
 
@@ -126,7 +137,7 @@ def detect_pattern(df):
         return "HOLD"
 
 # =====================================================
-# SIGNAL GENERATOR
+# AI SIGNAL LOGIC
 # =====================================================
 
 def generate_signal(df):
@@ -135,12 +146,14 @@ def generate_signal(df):
 
         close_series = df["Close"]
 
-        close = float(close_series.iloc[-1])
+        current_price = float(close_series.iloc[-1])
 
+        # RSI
         rsi = ta.momentum.RSIIndicator(
             close_series
         ).rsi().iloc[-1]
 
+        # Moving averages
         sma_fast = ta.trend.SMAIndicator(
             close_series,
             window=5
@@ -151,6 +164,7 @@ def generate_signal(df):
             window=20
         ).sma_indicator().iloc[-1]
 
+        # MACD
         macd = ta.trend.MACD(
             close_series
         ).macd_diff().iloc[-1]
@@ -161,7 +175,7 @@ def generate_signal(df):
         trend = "SIDEWAYS"
         confidence = 50
 
-        # BUY LOGIC
+        # BUY
         if (
             rsi > 50 and
             sma_fast > sma_slow and
@@ -173,7 +187,7 @@ def generate_signal(df):
             trend = "UPTREND"
             confidence = 90
 
-        # SELL LOGIC
+        # SELL
         elif (
             rsi < 50 and
             sma_fast < sma_slow and
@@ -190,20 +204,19 @@ def generate_signal(df):
             "trend": trend,
             "confidence": confidence,
             "rsi": round(float(rsi), 2),
-            "price": round(close, 5)
+            "price": round(current_price, 5)
         }
 
     except Exception as e:
 
         print(f"SIGNAL ERROR: {e}")
-
         return None
 
 # =====================================================
-# ENTRY TIME
+# SIGNAL TIMING
 # =====================================================
 
-def get_entry_times():
+def get_signal_times():
 
     now = datetime.now()
 
@@ -223,7 +236,7 @@ def get_entry_times():
     )
 
 # =====================================================
-# SEND SIGNAL
+# PROCESS PAIR
 # =====================================================
 
 async def process_pair(pair):
@@ -242,12 +255,10 @@ async def process_pair(pair):
         if result is None:
             return
 
-        signal = result["signal"]
-
-        if signal == "HOLD":
+        if result["signal"] == "HOLD":
             return
 
-        signal_time, entry_time, expiry_time = get_entry_times()
+        signal_time, entry_time, exit_time = get_signal_times()
 
         pair_name = pair.replace("=X", "")
 
@@ -256,7 +267,7 @@ async def process_pair(pair):
 
 💱 <b>PAIR:</b> {pair_name} OTC
 
-📢 <b>SIGNAL:</b> {signal}
+📢 <b>SIGNAL:</b> {result['signal']}
 
 🧠 <b>AI CONFIDENCE:</b> {result['confidence']}%
 
@@ -270,9 +281,9 @@ async def process_pair(pair):
 
 🟢 <b>ENTRY TIME:</b> {entry_time}
 
-🔴 <b>EXIT TIME:</b> {expiry_time}
+🔴 <b>EXIT TIME:</b> {exit_time}
 
-⏳ <b>TRADE DURATION:</b> 1 MINUTE
+⏳ <b>TRADE TIME:</b> 1 MINUTE
 
 ⚡ FAST OTC AI MODE ENABLED
 """
@@ -284,20 +295,21 @@ async def process_pair(pair):
         print(f"PAIR ERROR {pair}: {e}")
 
 # =====================================================
-# MAIN LOOP
+# MAIN BOT LOOP
 # =====================================================
 
 async def main():
 
-    startup = """
+    startup_message = """
 ✅ <b>AI OTC SIGNAL BOT STARTED</b>
 
 🚀 Live OTC Scanning Enabled
-⚡ Fast Scan Every 30 Seconds
-🧠 AI Candlestick Logic Activated
+⚡ Scan Every 30 Seconds
+🧠 AI Logic Activated
+📊 Candlestick Pattern Detection Enabled
 """
 
-    await send_telegram_message(startup)
+    await send_telegram_message(startup_message)
 
     while True:
 
@@ -322,7 +334,7 @@ async def main():
         await asyncio.sleep(SCAN_INTERVAL)
 
 # =====================================================
-# START
+# START BOT
 # =====================================================
 
 if __name__ == "__main__":
