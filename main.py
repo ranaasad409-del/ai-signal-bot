@@ -1,10 +1,9 @@
 import os
-import asyncio
+import time
 from datetime import datetime, timedelta
 
-import yfinance as yf
 import pandas as pd
-
+import yfinance as yf
 from telegram import Bot
 
 # ============================================
@@ -31,103 +30,31 @@ PAIRS = [
 ]
 
 # ============================================
-# RESULTS
+# STATS
 # ============================================
 
 wins = 0
 losses = 0
 
 # ============================================
-# GET SIGNAL
+# SEND TELEGRAM MESSAGE
 # ============================================
 
-def get_signal(pair):
-
+async def send_message(text):
     try:
-
-        data = yf.download(
-            pair,
-            period="1d",
-            interval="1m",
-            progress=False
-        )
-
-        if data.empty or len(data) < 30:
-            return None
-
-        close = data["Close"]
-
-        ema9 = close.ewm(span=9).mean()
-        ema21 = close.ewm(span=21).mean()
-
-        current_price = float(close.iloc[-1])
-
-        rsi_period = 14
-
-        delta = close.diff()
-
-        gain = delta.clip(lower=0)
-        loss = -delta.clip(upper=0)
-
-        avg_gain = gain.rolling(rsi_period).mean()
-        avg_loss = loss.rolling(rsi_period).mean()
-
-        rs = avg_gain / avg_loss
-
-        rsi = 100 - (100 / (1 + rs))
-
-        latest_rsi = float(rsi.iloc[-1])
-
-        latest_ema9 = float(ema9.iloc[-1])
-        latest_ema21 = float(ema21.iloc[-1])
-
-        last_candle = float(close.iloc[-1])
-        prev_candle = float(close.iloc[-2])
-
-        # BUY SIGNAL
-
-        if (
-            latest_ema9 > latest_ema21
-            and latest_rsi > 55
-            and last_candle > prev_candle
-        ):
-
-            return {
-                "signal": "BUY",
-                "price": current_price
-            }
-
-        # SELL SIGNAL
-
-        elif (
-            latest_ema9 < latest_ema21
-            and latest_rsi < 45
-            and last_candle < prev_candle
-        ):
-
-            return {
-                "signal": "SELL",
-                "price": current_price
-            }
-
-        return None
-
+        await bot.send_message(chat_id=CHAT_ID, text=text)
     except Exception as e:
-
-        print("SIGNAL ERROR:", e)
-        return None
+        print("TELEGRAM ERROR:", e)
 
 # ============================================
-# CHECK RESULT
+# SIGNAL GENERATOR
 # ============================================
 
-async def check_result(pair, signal, entry_price):
-
+async def check_signal(pair):
     global wins, losses
 
-    await asyncio.sleep(60)
-
     try:
+        print(f"Checking {pair}")
 
         data = yf.download(
             pair,
@@ -139,74 +66,94 @@ async def check_result(pair, signal, entry_price):
         if data.empty:
             return
 
-        close_price = float(data["Close"].iloc[-1])
+        close = data["Close"]
 
-        result = "LOSS"
+        if len(close) < 30:
+            return
 
-        if signal == "BUY" and close_price > entry_price:
-            result = "WIN"
+        # ============================================
+        # INDICATORS
+        # ============================================
 
-        elif signal == "SELL" and close_price < entry_price:
-            result = "WIN"
+        ema9 = close.ewm(span=9).mean()
+        ema21 = close.ewm(span=21).mean()
 
-        if result == "WIN":
-            wins += 1
-        else:
-            losses += 1
+        delta = close.diff()
 
-        total = wins + losses
+        gain = delta.where(delta > 0, 0)
+        loss = -delta.where(delta < 0, 0)
 
-        accuracy = round((wins / total) * 100, 2)
+        avg_gain = gain.rolling(14).mean()
+        avg_loss = loss.rolling(14).mean()
 
-        result_message = f"""
-🏁 RESULT
+        rs = avg_gain / avg_loss
 
-📊 Pair: {pair}
+        rsi = 100 - (100 / (1 + rs))
 
-🎯 Result: {result}
+        # ============================================
+        # SAFE FLOAT VALUES
+        # ============================================
 
-✅ Win = {wins}
-❌ Loss = {losses}
+        current_price = close.iloc[-1].item()
 
-📈 Accuracy = {accuracy}%
-"""
+        last_candle = close.iloc[-1].item()
+        prev_candle = close.iloc[-2].item()
 
-        await bot.send_message(
-            chat_id=CHAT_ID,
-            text=result_message
-        )
+        latest_rsi = rsi.iloc[-1].item()
 
-    except Exception as e:
+        latest_ema9 = ema9.iloc[-1].item()
+        latest_ema21 = ema21.iloc[-1].item()
 
-        print("RESULT ERROR:", e)
+        # ============================================
+        # SIGNAL LOGIC
+        # ============================================
 
-# ============================================
-# SEND SIGNAL
-# ============================================
+        signal = None
 
-async def send_signal(pair, signal_data):
+        # BUY
+        if (
+            latest_ema9 > latest_ema21
+            and latest_rsi < 70
+            and last_candle > prev_candle
+        ):
+            signal = "BUY"
 
-    signal = signal_data["signal"]
-    price = signal_data["price"]
+        # SELL
+        elif (
+            latest_ema9 < latest_ema21
+            and latest_rsi > 30
+            and last_candle < prev_candle
+        ):
+            signal = "SELL"
 
-    now = datetime.utcnow()
+        if signal is None:
+            return
 
-    signal_time = now.strftime("%H:%M:%S UTC")
+        # ============================================
+        # TIME
+        # ============================================
 
-    entry_time_obj = now + timedelta(seconds=10)
-    exit_time_obj = entry_time_obj + timedelta(minutes=1)
+        now = datetime.now()
 
-    entry_time = entry_time_obj.strftime("%H:%M:%S UTC")
-    exit_time = exit_time_obj.strftime("%H:%M:%S UTC")
+        signal_time = now.strftime("%H:%M:%S")
 
-    pair_name = pair.replace("=X", "")
+        entry_time_dt = (now + timedelta(seconds=10)).replace(second=0)
 
-    message = f"""
+        exit_time_dt = entry_time_dt + timedelta(minutes=1)
+
+        entry_time = entry_time_dt.strftime("%H:%M:%S")
+        exit_time = exit_time_dt.strftime("%H:%M:%S")
+
+        # ============================================
+        # SEND SIGNAL
+        # ============================================
+
+        message = f"""
 🔥 QUOTEX OTC SIGNAL 🔥
 
-📊 Pair: {pair_name} OTC
+📊 Pair: {pair.replace("=X", "")} OTC
 
-💰 Price: {round(price, 5)}
+💰 Price: {round(current_price, 5)}
 
 {"🟢 BUY SIGNAL" if signal == "BUY" else "🔴 SELL SIGNAL"}
 
@@ -219,60 +166,113 @@ async def send_signal(pair, signal_data):
 🕐 Expiry: 1 Minute
 """
 
-    await bot.send_message(
-        chat_id=CHAT_ID,
-        text=message
-    )
+        await send_message(message)
 
-    asyncio.create_task(
-        check_result(
+        # ============================================
+        # WAIT FOR RESULT
+        # ============================================
+
+        wait_seconds = (
+            exit_time_dt - datetime.now()
+        ).total_seconds()
+
+        if wait_seconds > 0:
+            time.sleep(wait_seconds)
+
+        # ============================================
+        # CHECK RESULT
+        # ============================================
+
+        result_data = yf.download(
             pair,
-            signal,
-            price
+            period="1d",
+            interval="1m",
+            progress=False
         )
-    )
+
+        if result_data.empty:
+            return
+
+        close_price = result_data["Close"].iloc[-1].item()
+
+        result = "LOSS"
+
+        if signal == "BUY" and close_price > current_price:
+            result = "WIN"
+
+        elif signal == "SELL" and close_price < current_price:
+            result = "WIN"
+
+        # ============================================
+        # STATS
+        # ============================================
+
+        if result == "WIN":
+            wins += 1
+        else:
+            losses += 1
+
+        total = wins + losses
+
+        accuracy = 0
+
+        if total > 0:
+            accuracy = round((wins / total) * 100, 2)
+
+        # ============================================
+        # SEND RESULT
+        # ============================================
+
+        result_message = f"""
+📈 SIGNAL RESULT
+
+📊 Pair: {pair.replace("=X", "")}
+
+{"✅ WIN = 1" if result == "WIN" else "❌ LOSS = 0"}
+
+🏆 Wins: {wins}
+
+💀 Losses: {losses}
+
+🎯 Accuracy: {accuracy}%
+"""
+
+        await send_message(result_message)
+
+    except Exception as e:
+        print("SIGNAL ERROR:", e)
 
 # ============================================
 # MAIN LOOP
 # ============================================
 
 async def main():
-
     print("AI SIGNAL BOT STARTED")
 
+    await send_message("✅ Quotex OTC Signal Bot Connected")
+
     while True:
-
         try:
+            current_second = datetime.now().second
 
-            current_second = datetime.utcnow().second
-
-            # SEND SIGNAL AT xx:xx:50
-
+            # SEND SIGNALS AT :50
             if current_second == 50:
 
                 for pair in PAIRS:
-
-                    print(f"Checking {pair}")
-
-                    signal_data = get_signal(pair)
-
-                    if signal_data:
-
-                        await send_signal(pair, signal_data)
-
-                    await asyncio.sleep(2)
+                    await check_signal(pair)
 
                 print("WAITING NEXT MINUTE...")
+                time.sleep(15)
 
-            await asyncio.sleep(1)
+            time.sleep(1)
 
         except Exception as e:
-
-            print("MAIN ERROR:", e)
-            await asyncio.sleep(5)
+            print("MAIN LOOP ERROR:", e)
+            time.sleep(5)
 
 # ============================================
 # START
 # ============================================
 
+import asyncio
 asyncio.run(main())
