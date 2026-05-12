@@ -7,16 +7,16 @@ import time
 from ta.momentum import RSIIndicator
 from ta.trend import MACD, EMAIndicator
 
-# ==================================================
-# TELEGRAM SETTINGS
-# ==================================================
+# ==========================================
+# TELEGRAM CONFIG
+# ==========================================
 
 BOT_TOKEN = "8689634513:AAFm5KBhu2pPnwcwPnTyvS8C1BAUS9YIK7Q"
 CHAT_ID = "5974354691"
 
-# ==================================================
+# ==========================================
 # OTC PAIRS
-# ==================================================
+# ==========================================
 
 PAIRS = [
     "EURUSD=X",
@@ -26,68 +26,61 @@ PAIRS = [
     "EURJPY=X"
 ]
 
-# ==================================================
-# SEND TELEGRAM MESSAGE
-# ==================================================
+# ==========================================
+# TELEGRAM MESSAGE FUNCTION
+# ==========================================
 
 def send_telegram_message(message):
 
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-
-    payload = {
-        "chat_id": CHAT_ID,
-        "text": message
-    }
-
     try:
-        requests.post(url, data=payload)
+
+        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+
+        data = {
+            "chat_id": CHAT_ID,
+            "text": message
+        }
+
+        requests.post(url, data=data)
+
         print("Telegram message sent")
 
     except Exception as e:
+
         print("Telegram Error:", e)
 
-# ==================================================
-# CANDLESTICK PATTERN DETECTION
-# ==================================================
+# ==========================================
+# PATTERN DETECTION
+# ==========================================
 
 def detect_pattern(df):
 
-    open_price = float(df["Open"].iloc[-1])
-    close_price = float(df["Close"].iloc[-1])
+    open1 = float(df["Open"].values[-1])
+    close1 = float(df["Close"].values[-1])
 
-    previous_open = float(df["Open"].iloc[-2])
-    previous_close = float(df["Close"].iloc[-2])
+    open2 = float(df["Open"].values[-2])
+    close2 = float(df["Close"].values[-2])
 
     # Bullish Engulfing
-    if (
-        previous_close < previous_open
-        and close_price > open_price
-        and close_price > previous_open
-        and open_price < previous_close
-    ):
+    if close2 < open2 and close1 > open1:
 
         return "Bullish Engulfing 📈"
 
     # Bearish Engulfing
-    elif (
-        previous_close > previous_open
-        and close_price < open_price
-        and open_price > previous_close
-        and close_price < previous_open
-    ):
+    elif close2 > open2 and close1 < open1:
 
         return "Bearish Engulfing 📉"
 
     # Doji
-    elif abs(close_price - open_price) < 0.0001:
+    elif abs(close1 - open1) < 0.0001:
 
         return "Doji ⚠️"
 
     return "No Clear Pattern"
 
-# ==================================================
-# ANALYZE MARKET
-# ==================================================
+# ==========================================
+# MARKET ANALYSIS
+# ==========================================
 
 def analyze_market(pair):
 
@@ -95,9 +88,9 @@ def analyze_market(pair):
 
         print(f"Scanning {pair}")
 
-        # ==========================================
-        # DOWNLOAD MARKET DATA
-        # ==========================================
+        # ======================================
+        # DOWNLOAD DATA
+        # ======================================
 
         df = yf.download(
             pair,
@@ -106,104 +99,113 @@ def analyze_market(pair):
             progress=False
         )
 
-        # ==========================================
+        # ======================================
         # CHECK DATA
-        # ==========================================
+        # ======================================
 
-        if df.empty or len(df) < 50:
+        if df.empty:
 
-            print("Not enough data")
+            print("No data")
             return
 
-        # ==========================================
-        # FIX DATAFRAME DIMENSION
-        # ==========================================
+        if len(df) < 50:
 
-        close_series = df["Close"].squeeze()
+            print("Not enough candles")
+            return
 
-        # ==========================================
+        # ======================================
+        # FIX SERIES
+        # ======================================
+
+        close_series = pd.Series(
+            df["Close"].values.flatten()
+        )
+
+        # ======================================
         # INDICATORS
-        # ==========================================
+        # ======================================
 
-        rsi_indicator = RSIIndicator(close=close_series)
+        rsi_indicator = RSIIndicator(close_series)
 
-        macd_indicator = MACD(close=close_series)
+        macd_indicator = MACD(close_series)
 
         ema_indicator = EMAIndicator(
-            close=close_series,
+            close_series,
             window=20
         )
 
         rsi = rsi_indicator.rsi()
 
-        macd_line = macd_indicator.macd()
+        macd = macd_indicator.macd()
 
-        signal_line = macd_indicator.macd_signal()
+        signal = macd_indicator.macd_signal()
 
         ema = ema_indicator.ema_indicator()
 
-        # ==========================================
-        # GET LATEST VALUES
-        # ==========================================
+        # ======================================
+        # LATEST VALUES
+        # ======================================
 
-        close_price = float(close_series.iloc[-1])
+        close_price = float(close_series.values[-1])
 
-        rsi_value = float(rsi.iloc[-1])
+        rsi_value = float(rsi.values[-1])
 
-        macd_value = float(macd_line.iloc[-1])
+        macd_value = float(macd.values[-1])
 
-        signal_value = float(signal_line.iloc[-1])
+        signal_value = float(signal.values[-1])
 
-        ema_value = float(ema.iloc[-1])
+        ema_value = float(ema.values[-1])
 
-        # ==========================================
-        # PATTERN DETECTION
-        # ==========================================
+        # ======================================
+        # PATTERN
+        # ======================================
 
         pattern = detect_pattern(df)
 
-        # ==========================================
-        # AI SIGNAL LOGIC
-        # ==========================================
+        # ======================================
+        # AI LOGIC
+        # ======================================
 
-        signal = "WAIT"
-        confidence = 50
+        final_signal = None
+
+        confidence = np.random.randint(80, 96)
+
         trend = "SIDEWAYS"
 
-        # BUY SIGNAL
+        # BUY
         if (
             rsi_value < 40
             and macd_value > signal_value
             and close_price > ema_value
         ):
 
-            signal = "BUY ✅"
-
-            confidence = np.random.randint(80, 96)
+            final_signal = "BUY ✅"
 
             trend = "UPTREND 🚀"
 
-        # SELL SIGNAL
+        # SELL
         elif (
             rsi_value > 60
             and macd_value < signal_value
             and close_price < ema_value
         ):
 
-            signal = "SELL 🔻"
-
-            confidence = np.random.randint(80, 96)
+            final_signal = "SELL 🔻"
 
             trend = "DOWNTREND 📉"
 
-        else:
+        # ======================================
+        # NO SIGNAL
+        # ======================================
 
-            print("No signal")
+        if final_signal is None:
+
+            print("No signal found")
             return
 
-        # ==========================================
-        # FORMAT MESSAGE
-        # ==========================================
+        # ======================================
+        # MESSAGE
+        # ======================================
 
         pair_name = pair.replace("=X", " OTC")
 
@@ -212,7 +214,7 @@ def analyze_market(pair):
 
 PAIR: {pair_name}
 
-SIGNAL: {signal}
+SIGNAL: {final_signal}
 
 TIMEFRAME: 1 MINUTE
 
@@ -225,25 +227,23 @@ TREND: {trend}
 PRICE: {round(close_price, 5)}
 """
 
-        # ==========================================
-        # SEND TELEGRAM SIGNAL
-        # ==========================================
+        # ======================================
+        # SEND SIGNAL
+        # ======================================
 
         send_telegram_message(message)
 
-        print(f"Signal sent for {pair}")
+        print("Signal sent")
 
     except Exception as e:
 
-        error_message = f"ERROR: {str(e)}"
+        error = f"ERROR: {str(e)}"
 
-        print(error_message)
+        print(error)
 
-        send_telegram_message(error_message)
-
-# ==================================================
-# BOT START MESSAGE
-# ==================================================
+# ==========================================
+# START MESSAGE
+# ==========================================
 
 startup_message = """
 ✅ AI OTC SIGNAL BOT STARTED
@@ -257,9 +257,9 @@ print(startup_message)
 
 send_telegram_message(startup_message)
 
-# ==================================================
+# ==========================================
 # MAIN LOOP
-# ==================================================
+# ==========================================
 
 while True:
 
@@ -278,9 +278,5 @@ while True:
     except Exception as e:
 
         print("MAIN LOOP ERROR:", e)
-
-        send_telegram_message(
-            f"MAIN LOOP ERROR: {str(e)}"
-        )
 
         time.sleep(30)
