@@ -8,15 +8,12 @@ import yfinance as yf
 
 from telegram import Bot
 
-# ============================================
-# SAFE ENV VARIABLES
-# ============================================
+# =========================================================
+# ENV VARIABLES
+# =========================================================
 
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 CHAT_ID = os.getenv("CHAT_ID", "").strip()
-
-print("BOT TOKEN =", BOT_TOKEN)
-print("CHAT ID =", CHAT_ID)
 
 if not BOT_TOKEN:
     raise Exception("BOT_TOKEN not found in Railway Variables")
@@ -26,32 +23,37 @@ if not CHAT_ID:
 
 bot = Bot(token=BOT_TOKEN)
 
-# ============================================
-# FOREX / OTC PAIRS
-# ============================================
+# =========================================================
+# PAIRS
+# =========================================================
 
 PAIRS = [
     "EURUSD=X",
     "GBPUSD=X",
     "USDJPY=X",
     "AUDUSD=X",
+    "USDCAD=X",
+    "USDCHF=X",
+    "NZDUSD=X",
     "EURJPY=X",
     "GBPJPY=X",
+    "USDTRY=X",
+    "USDZAR=X",
     "USDBRL=X",
     "USDPKR=X",
     "USDMXN=X"
 ]
 
-# ============================================
-# RSI CALCULATION
-# ============================================
+# =========================================================
+# RSI
+# =========================================================
 
-def calculate_rsi(data, period=14):
+def calculate_rsi(df, period=14):
 
-    delta = data["Close"].diff()
+    delta = df["Close"].diff()
 
-    gain = delta.where(delta > 0, 0)
-    loss = -delta.where(delta < 0, 0)
+    gain = delta.clip(lower=0)
+    loss = -delta.clip(upper=0)
 
     avg_gain = gain.rolling(period).mean()
     avg_loss = loss.rolling(period).mean()
@@ -62,28 +64,37 @@ def calculate_rsi(data, period=14):
 
     return rsi
 
-# ============================================
-# AI SIGNAL DETECTION
-# ============================================
+# =========================================================
+# SIGNAL DETECTION
+# =========================================================
 
 def detect_signal(df):
 
     try:
 
+        if len(df) < 20:
+            return None
+
         close = df["Close"]
 
-        rsi = calculate_rsi(df).iloc[-1]
+        # RSI
+        rsi_series = calculate_rsi(df)
+        rsi = float(rsi_series.iloc[-1])
 
-        ema_fast = close.ewm(span=5).mean().iloc[-1]
-        ema_slow = close.ewm(span=10).mean().iloc[-1]
+        # EMA
+        ema_fast_series = close.ewm(span=5).mean()
+        ema_slow_series = close.ewm(span=10).mean()
 
-        current_price = close.iloc[-1]
+        ema_fast = float(ema_fast_series.iloc[-1])
+        ema_slow = float(ema_slow_series.iloc[-1])
+
+        current_price = float(close.iloc[-1])
 
         signal = None
         trend = "SIDEWAYS"
         confidence = 50
 
-        # BUY CONDITIONS
+        # BUY SIGNAL
         if ema_fast > ema_slow and rsi > 55:
 
             signal = "BUY"
@@ -94,7 +105,7 @@ def detect_signal(df):
                 int((rsi + 50) / 1.4)
             )
 
-        # SELL CONDITIONS
+        # SELL SIGNAL
         elif ema_fast < ema_slow and rsi < 45:
 
             signal = "SELL"
@@ -105,163 +116,158 @@ def detect_signal(df):
                 int((100 - rsi + 50) / 1.4)
             )
 
+        else:
+            return None
+
         return {
             "signal": signal,
             "trend": trend,
             "confidence": confidence,
-            "rsi": round(float(rsi), 2),
-            "price": round(float(current_price), 5)
+            "rsi": round(rsi, 2),
+            "price": round(current_price, 5)
         }
 
     except Exception as e:
 
-        print("SIGNAL ERROR:", e)
+        print("SIGNAL ERROR:", str(e))
         return None
 
-# ============================================
-# TELEGRAM SIGNAL MESSAGE
-# ============================================
+# =========================================================
+# TELEGRAM MESSAGE
+# =========================================================
 
 async def send_signal(pair, data):
 
-    now = datetime.utcnow()
+    try:
 
-    # Entry next candle
-    entry_time = (
-        now + timedelta(minutes=1)
-    ).replace(second=0, microsecond=0)
+        now = datetime.utcnow()
 
-    # Signal 10 seconds before entry
-    signal_time = entry_time - timedelta(seconds=10)
+        # SIGNAL 10 sec before next minute
+        next_minute = (now + timedelta(minutes=1)).replace(second=0, microsecond=0)
 
-    # Exit after 1 minute
-    exit_time = entry_time + timedelta(minutes=1)
+        signal_time = next_minute - timedelta(seconds=10)
 
-    message = f"""
-📊 AI OTC SIGNAL
+        entry_time = next_minute.strftime("%H:%M")
+        exit_time = (next_minute + timedelta(minutes=1)).strftime("%H:%M")
 
-💱 PAIR: {pair.replace("=X", "")}
+        pair_name = pair.replace("=X", "")
 
-📈 SIGNAL: {data['signal']}
+        message = f"""
+🔥 AI OTC SIGNAL 🔥
 
-🔥 AI CONFIDENCE: {data['confidence']}%
+📊 Pair: {pair_name}
 
-📊 TREND: {data['trend']}
+📈 Signal: {data['signal']}
+
+💪 Confidence: {data['confidence']}%
+
+📈 Trend: {data['trend']}
+
+💰 Price: {data['price']}
 
 📉 RSI: {data['rsi']}
 
-💰 PRICE: {data['price']}
+⏰ Signal Time: {signal_time.strftime("%H:%M:%S")}
 
-⏰ SIGNAL TIME:
-{signal_time.strftime('%H:%M:%S')} UTC
+🟢 Entry Time: {entry_time}
 
-🚀 ENTRY TIME:
-{entry_time.strftime('%H:%M:%S')} UTC
+🔴 Exit Time: {exit_time}
 
-⌛ TRADE TIME:
-1 MINUTE
-
-🏁 EXIT TIME:
-{exit_time.strftime('%H:%M:%S')} UTC
-
-⚡ AI FAST SCAN ENABLED
+⚡ Duration: 1 Minute
 """
-
-    try:
 
         await bot.send_message(
             chat_id=CHAT_ID,
             text=message
         )
 
-        print("SIGNAL SENT:", pair)
+        print(f"SENT: {pair_name} {data['signal']}")
 
     except Exception as e:
 
-        print("TELEGRAM ERROR:", e)
+        print("TELEGRAM ERROR:", str(e))
 
-# ============================================
-# MARKET SCANNER
-# ============================================
+# =========================================================
+# GET MARKET DATA
+# =========================================================
 
-async def scan_market():
+def get_data(pair):
+
+    try:
+
+        df = yf.download(
+            pair,
+            period="1d",
+            interval="1m",
+            progress=False,
+            auto_adjust=True
+        )
+
+        return df
+
+    except Exception as e:
+
+        print("DATA ERROR:", str(e))
+        return None
+
+# =========================================================
+# MAIN LOOP
+# =========================================================
+
+async def scanner():
+
+    print("AI SIGNAL BOT STARTED")
 
     while True:
 
         try:
 
-            print("================================")
-            print("NEW MARKET SCAN")
-            print(datetime.utcnow())
-            print("================================")
+            current_second = datetime.utcnow().second
 
-            for pair in PAIRS:
+            # Run near 50 seconds
+            if current_second >= 50:
 
-                try:
+                print("SCANNING MARKET...")
 
-                    print("Scanning:", pair)
+                for pair in PAIRS:
 
-                    df = yf.download(
-                        pair,
-                        period="1d",
-                        interval="1m",
-                        progress=False
-                    )
+                    try:
 
-                    if df.empty:
+                        print(f"Scanning: {pair}")
 
-                        print("NO DATA:", pair)
-                        continue
+                        df = get_data(pair)
 
-                    signal_data = detect_signal(df)
+                        if df is None or df.empty:
+                            continue
 
-                    if signal_data is None:
-                        continue
+                        signal = detect_signal(df)
 
-                    if signal_data["signal"] is not None:
+                        if signal:
 
-                        await send_signal(
-                            pair,
-                            signal_data
-                        )
+                            await send_signal(pair, signal)
 
-                    await asyncio.sleep(2)
+                            await asyncio.sleep(2)
 
-                except Exception as pair_error:
+                    except Exception as e:
 
-                    print(
-                        "PAIR ERROR:",
-                        pair_error
-                    )
+                        print("PAIR ERROR:", str(e))
 
-            print("Waiting 30 seconds...")
-            await asyncio.sleep(30)
+                print("Waiting next cycle...")
 
-        except Exception as main_error:
+                await asyncio.sleep(15)
 
-            print(
-                "MAIN LOOP ERROR:",
-                main_error
-            )
+            else:
+
+                await asyncio.sleep(1)
+
+        except Exception as e:
+
+            print("MAIN LOOP ERROR:", str(e))
 
             await asyncio.sleep(10)
 
-# ============================================
-# MAIN START
-# ============================================
+# =========================================================
+# START BOT
+# =========================================================
 
-async def main():
-
-    print("================================")
-    print("AI SIGNAL BOT STARTED")
-    print("================================")
-
-    await scan_market()
-
-# ============================================
-# RUN APP
-# ============================================
-
-if __name__ == "__main__":
-
-    asyncio.run(main())
+asyncio.run(scanner())
