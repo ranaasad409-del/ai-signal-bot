@@ -1,11 +1,12 @@
 python-telegram-bot==13.15
-yfinance
 pandas
 numpy
-scikit-learn
+yfinance
 ta
+scikit-learn
 flask
 matplotlib
 mplfinance
-requests
 joblib
+requests
+schedule
