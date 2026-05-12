@@ -1,144 +1,74 @@
-# =========================================================
-# AI OTC SIGNAL BOT — FINAL STABLE VERSION
-# =========================================================
-
 import os
-import time
-import sqlite3
+import asyncio
 import warnings
+from datetime import datetime, timedelta
+
+import yfinance as yf
+import pandas as pd
+import ta
+
+from telegram import Bot
+from telegram.constants import ParseMode
 
 warnings.filterwarnings("ignore")
 
-import pandas as pd
-import numpy as np
-import yfinance as yf
-
-from ta.trend import EMAIndicator, MACD
-from ta.momentum import RSIIndicator
-from ta.volatility import BollingerBands
-
-from sklearn.ensemble import RandomForestClassifier
-
-from telegram import Bot
-from flask import Flask
-
-# =========================================================
-# OPTIONAL CHART LIBRARY
-# =========================================================
-
-try:
-    import mplfinance as mpf
-    MPF_AVAILABLE = True
-except:
-    MPF_AVAILABLE = False
-
-# =========================================================
+# =====================================================
 # CONFIG
-# =========================================================
+# =====================================================
 
 BOT_TOKEN = os.getenv("8689634513:AAFm5KBhu2pPnwcwPnTyvS8C1BAUS9YIK7Q")
 CHAT_ID = os.getenv("5974354691")
 
 bot = Bot(token=BOT_TOKEN)
 
-SCAN_INTERVAL = 20
+SCAN_INTERVAL = 30
 
 PAIRS = [
-
     "EURUSD=X",
     "GBPUSD=X",
     "USDJPY=X",
     "AUDUSD=X",
     "EURJPY=X",
     "GBPJPY=X",
-
-    "BRL=X",
-    "MXN=X",
-    "PKR=X"
-
+    "USDBRL=X",
+    "USDPKR=X",
+    "USDMXN=X"
 ]
 
-# =========================================================
-# FLASK SERVER
-# =========================================================
+# =====================================================
+# TELEGRAM
+# =====================================================
 
-app = Flask(__name__)
+async def send_telegram_message(message):
 
-@app.route("/")
-def home():
-    return "AI OTC SIGNAL BOT RUNNING"
+    try:
 
-# =========================================================
-# DATABASE
-# =========================================================
+        await bot.send_message(
+            chat_id=CHAT_ID,
+            text=message,
+            parse_mode=ParseMode.HTML
+        )
 
-conn = sqlite3.connect(
-    "signals.db",
-    check_same_thread=False
-)
+        print("Telegram message sent")
 
-cursor = conn.cursor()
+    except Exception as e:
 
-cursor.execute("""
+        print(f"Telegram Error: {e}")
 
-CREATE TABLE IF NOT EXISTS signals (
-
-    pair TEXT,
-    signal TEXT,
-    confidence REAL,
-    result TEXT,
-    entry_price REAL,
-    close_price REAL,
-    timestamp TEXT
-
-)
-
-""")
-
-conn.commit()
-
-# =========================================================
-# START MESSAGE
-# =========================================================
-
-try:
-
-    bot.send_message(
-
-        chat_id=CHAT_ID,
-
-        text="""
-✅ AI OTC SIGNAL BOT STARTED
-
-📡 LIVE OTC SCANNING ENABLED
-⚡ FAST SCAN MODE ENABLED
-🤖 MACHINE LEARNING ACTIVE
-📊 CANDLESTICK ANALYSIS ACTIVE
-🧠 AI CONFIDENCE FILTER ENABLED
-📈 REAL-TIME SIGNAL ENGINE READY
-"""
-
-    )
-
-except Exception as e:
-
-    print("Telegram Error:", e)
-
-# =========================================================
-# GET DATA
-# =========================================================
+# =====================================================
+# DOWNLOAD DATA
+# =====================================================
 
 def get_data(pair):
 
     try:
 
         df = yf.download(
-
             pair,
-            period="2d",
+            period="1d",
             interval="1m",
-            progress=False
-
+            progress=False,
+            auto_adjust=True
         )
 
         if df.empty:
@@ -150,224 +80,153 @@ def get_data(pair):
 
     except Exception as e:
 
-        print("DATA ERROR:", e)
-
+        print(f"DATA ERROR {pair}: {e}")
         return None
 
-# =========================================================
-# ADD INDICATORS
-# =========================================================
-
-def add_indicators(df):
-
-    close = df["Close"].squeeze()
-
-    df["EMA10"] = EMAIndicator(
-        close=close,
-        window=10
-    ).ema_indicator()
-
-    df["EMA20"] = EMAIndicator(
-        close=close,
-        window=20
-    ).ema_indicator()
-
-    df["RSI"] = RSIIndicator(
-        close=close,
-        window=14
-    ).rsi()
-
-    macd = MACD(close=close)
-
-    df["MACD"] = macd.macd()
-    df["MACD_SIGNAL"] = macd.macd_signal()
-
-    bb = BollingerBands(close=close)
-
-    df["BB_HIGH"] = bb.bollinger_hband()
-    df["BB_LOW"] = bb.bollinger_lband()
-
-    return df
-
-# =========================================================
-# CANDLESTICK PATTERN
-# =========================================================
+# =====================================================
+# PATTERN DETECTION
+# =====================================================
 
 def detect_pattern(df):
 
     try:
 
         last = df.iloc[-1]
+        prev = df.iloc[-2]
 
         open_price = float(last["Open"])
         close_price = float(last["Close"])
-        high_price = float(last["High"])
-        low_price = float(last["Low"])
 
-        body = abs(close_price - open_price)
+        prev_open = float(prev["Open"])
+        prev_close = float(prev["Close"])
 
-        candle_range = high_price - low_price
-
-        if candle_range == 0:
-            return "NONE"
-
-        # HAMMER
-
+        # Bullish engulfing
         if (
-            body < candle_range * 0.3 and
-            (min(open_price, close_price) - low_price) > body * 2
+            close_price > open_price and
+            prev_close < prev_open and
+            close_price > prev_open and
+            open_price < prev_close
         ):
-            return "HAMMER"
+            return "BUY"
 
-        # SHOOTING STAR
-
+        # Bearish engulfing
         if (
-            body < candle_range * 0.3 and
-            (high_price - max(open_price, close_price)) > body * 2
+            close_price < open_price and
+            prev_close > prev_open and
+            close_price < prev_open and
+            open_price > prev_close
         ):
-            return "SHOOTING_STAR"
+            return "SELL"
 
-        if close_price > open_price:
-            return "BULLISH"
-
-        if close_price < open_price:
-            return "BEARISH"
-
-        return "NONE"
+        return "HOLD"
 
     except Exception as e:
 
-        print("PATTERN ERROR:", e)
+        print(f"PATTERN ERROR: {e}")
+        return "HOLD"
 
-        return "NONE"
+# =====================================================
+# SIGNAL GENERATOR
+# =====================================================
 
-# =========================================================
-# MACHINE LEARNING MODEL
-# =========================================================
-
-def train_model(df):
+def generate_signal(df):
 
     try:
 
-        data = df.copy()
+        close_series = df["Close"]
 
-        data["TARGET"] = np.where(
+        close = float(close_series.iloc[-1])
 
-            data["Close"].shift(-1) > data["Close"],
-            1,
-            0
+        rsi = ta.momentum.RSIIndicator(
+            close_series
+        ).rsi().iloc[-1]
 
-        )
+        sma_fast = ta.trend.SMAIndicator(
+            close_series,
+            window=5
+        ).sma_indicator().iloc[-1]
 
-        data.dropna(inplace=True)
+        sma_slow = ta.trend.SMAIndicator(
+            close_series,
+            window=20
+        ).sma_indicator().iloc[-1]
 
-        features = data[[
-            "RSI",
-            "MACD",
-            "MACD_SIGNAL"
-        ]]
+        macd = ta.trend.MACD(
+            close_series
+        ).macd_diff().iloc[-1]
 
-        target = data["TARGET"]
+        pattern = detect_pattern(df)
 
-        model = RandomForestClassifier(
-            n_estimators=100
-        )
+        signal = "HOLD"
+        trend = "SIDEWAYS"
+        confidence = 50
 
-        model.fit(features, target)
+        # BUY LOGIC
+        if (
+            rsi > 50 and
+            sma_fast > sma_slow and
+            macd > 0 and
+            pattern == "BUY"
+        ):
 
-        latest = features.iloc[-1:]
+            signal = "BUY"
+            trend = "UPTREND"
+            confidence = 90
 
-        prediction = model.predict(latest)[0]
+        # SELL LOGIC
+        elif (
+            rsi < 50 and
+            sma_fast < sma_slow and
+            macd < 0 and
+            pattern == "SELL"
+        ):
 
-        probability = model.predict_proba(latest)[0]
+            signal = "SELL"
+            trend = "DOWNTREND"
+            confidence = 90
 
-        confidence = round(
-            max(probability) * 100,
-            2
-        )
-
-        return prediction, confidence
-
-    except Exception as e:
-
-        print("ML ERROR:", e)
-
-        return None, 0
-
-# =========================================================
-# CREATE CHART
-# =========================================================
-
-def create_chart(df, pair):
-
-    try:
-
-        if not MPF_AVAILABLE:
-            return None
-
-        filename = f"{pair}.png"
-
-        mpf.plot(
-
-            df.tail(80),
-            type="candle",
-            style="charles",
-            volume=False,
-            savefig=filename
-
-        )
-
-        return filename
+        return {
+            "signal": signal,
+            "trend": trend,
+            "confidence": confidence,
+            "rsi": round(float(rsi), 2),
+            "price": round(close, 5)
+        }
 
     except Exception as e:
 
-        print("CHART ERROR:", e)
+        print(f"SIGNAL ERROR: {e}")
 
         return None
 
-# =========================================================
-# SAVE SIGNAL
-# =========================================================
+# =====================================================
+# ENTRY TIME
+# =====================================================
 
-def save_signal(
+def get_entry_times():
 
-    pair,
-    signal,
-    confidence,
-    result,
-    entry_price,
-    close_price
+    now = datetime.now()
 
-):
+    next_minute = (now + timedelta(minutes=1)).replace(
+        second=0,
+        microsecond=0
+    )
 
-    try:
+    signal_time = next_minute - timedelta(seconds=10)
 
-        cursor.execute("""
+    expiry_time = next_minute + timedelta(minutes=1)
 
-        INSERT INTO signals VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
+    return (
+        signal_time.strftime("%H:%M:%S"),
+        next_minute.strftime("%H:%M"),
+        expiry_time.strftime("%H:%M")
+    )
 
-        """, (
+# =====================================================
+# SEND SIGNAL
+# =====================================================
 
-            pair,
-            signal,
-            confidence,
-            result,
-            entry_price,
-            close_price
-
-        ))
-
-        conn.commit()
-
-    except Exception as e:
-
-        print("DATABASE ERROR:", e)
-
-# =========================================================
-# ANALYZE MARKET
-# =========================================================
-
-def analyze(pair):
+async def process_pair(pair):
 
     try:
 
@@ -378,278 +237,94 @@ def analyze(pair):
         if df is None:
             return
 
-        df = add_indicators(df)
+        result = generate_signal(df)
 
-        pattern = detect_pattern(df)
-
-        prediction, confidence = train_model(df)
-
-        if prediction is None:
+        if result is None:
             return
 
-        last = df.iloc[-1]
+        signal = result["signal"]
 
-        current_price = round(
-            float(last["Close"]),
-            5
-        )
-
-        rsi = round(
-            float(last["RSI"]),
-            2
-        )
-
-        ema10 = float(last["EMA10"])
-        ema20 = float(last["EMA20"])
-
-        # =================================================
-        # TREND
-        # =================================================
-
-        trend = "SIDEWAYS"
-
-        if ema10 > ema20:
-            trend = "UPTREND"
-
-        elif ema10 < ema20:
-            trend = "DOWNTREND"
-
-        # =================================================
-        # SIGNAL
-        # =================================================
-
-        signal = None
-
-        if (
-
-            prediction == 1 and
-            confidence >= 75 and
-            trend == "UPTREND"
-
-        ):
-
-            signal = "BUY"
-
-        elif (
-
-            prediction == 0 and
-            confidence >= 75 and
-            trend == "DOWNTREND"
-
-        ):
-
-            signal = "SELL"
-
-        if signal is None:
+        if signal == "HOLD":
             return
 
-        # =================================================
-        # PERFECT ENTRY TIMING
-        # =================================================
+        signal_time, entry_time, expiry_time = get_entry_times()
 
-        current_seconds = time.localtime().tm_sec
-
-        if current_seconds < 50:
-
-            wait_time = 50 - current_seconds
-
-            print(f"Waiting {wait_time} sec...")
-
-            time.sleep(wait_time)
-
-        signal_time = time.strftime("%H:%M:%S")
-
-        next_minute = (
-            time.localtime().tm_min + 1
-        ) % 60
-
-        entry_time = time.strftime(
-            f"%H:{next_minute:02d}:00"
-        )
-
-        # =================================================
-        # SEND SIGNAL
-        # =================================================
+        pair_name = pair.replace("=X", "")
 
         message = f"""
-📊 AI OTC SIGNAL
+📊 <b>AI OTC SIGNAL</b>
 
-💱 PAIR: {pair.replace("=X", "")} OTC
+💱 <b>PAIR:</b> {pair_name} OTC
 
-📈 SIGNAL: {signal}
+📢 <b>SIGNAL:</b> {signal}
 
-🎯 AI CONFIDENCE: {confidence}%
+🧠 <b>AI CONFIDENCE:</b> {result['confidence']}%
 
-📊 TREND: {trend}
+📈 <b>TREND:</b> {result['trend']}
 
-🕯 PATTERN: {pattern}
+📍 <b>RSI:</b> {result['rsi']}
 
-📉 RSI: {rsi}
+💰 <b>PRICE:</b> {result['price']}
 
-💰 PRICE: {current_price}
+⏰ <b>SIGNAL TIME:</b> {signal_time}
 
-🚨 SIGNAL TIME: {signal_time}
+🟢 <b>ENTRY TIME:</b> {entry_time}
 
-⏰ ENTRY TIME: {entry_time}
+🔴 <b>EXIT TIME:</b> {expiry_time}
 
-⌛ DURATION: 1 MINUTE
+⏳ <b>TRADE DURATION:</b> 1 MINUTE
 
-⚡ ENTER EXACTLY ON NEXT CANDLE
+⚡ FAST OTC AI MODE ENABLED
 """
 
-        bot.send_message(
-            chat_id=CHAT_ID,
-            text=message
-        )
-
-        print("Signal Sent")
-
-        # =================================================
-        # SEND CHART
-        # =================================================
-
-        chart = create_chart(df, pair)
-
-        if chart:
-
-            bot.send_photo(
-
-                chat_id=CHAT_ID,
-                photo=open(chart, "rb")
-
-            )
-
-        # =================================================
-        # WAIT FOR ENTRY
-        # =================================================
-
-        seconds = time.localtime().tm_sec
-
-        if seconds < 60:
-            time.sleep(60 - seconds)
-
-        # =================================================
-        # ENTRY PRICE
-        # =================================================
-
-        entry_df = get_data(pair)
-
-        if entry_df is None:
-            return
-
-        entry_price = round(
-            float(entry_df.iloc[-1]["Close"]),
-            5
-        )
-
-        print("Trade Started")
-
-        # =================================================
-        # WAIT 1 MINUTE
-        # =================================================
-
-        time.sleep(60)
-
-        # =================================================
-        # CLOSE PRICE
-        # =================================================
-
-        result_df = get_data(pair)
-
-        if result_df is None:
-            return
-
-        close_price = round(
-            float(result_df.iloc[-1]["Close"]),
-            5
-        )
-
-        # =================================================
-        # RESULT
-        # =================================================
-
-        result = "LOSS"
-
-        if (
-            signal == "BUY" and
-            close_price > entry_price
-        ):
-
-            result = "WIN"
-
-        elif (
-            signal == "SELL" and
-            close_price < entry_price
-        ):
-
-            result = "WIN"
-
-        # =================================================
-        # SAVE HISTORY
-        # =================================================
-
-        save_signal(
-
-            pair,
-            signal,
-            confidence,
-            result,
-            entry_price,
-            close_price
-
-        )
-
-        # =================================================
-        # SEND RESULT
-        # =================================================
-
-        result_message = f"""
-📋 TRADE CLOSED
-
-💱 PAIR: {pair.replace("=X", "")}
-
-📈 SIGNAL: {signal}
-
-💰 ENTRY: {entry_price}
-
-💵 CLOSE: {close_price}
-
-🏆 RESULT: {result}
-
-⌛ CLOSED AFTER 1 MINUTE
-"""
-
-        bot.send_message(
-
-            chat_id=CHAT_ID,
-            text=result_message
-
-        )
-
-        print("Trade Completed")
+        await send_telegram_message(message)
 
     except Exception as e:
 
-        print("ANALYZE ERROR:", e)
+        print(f"PAIR ERROR {pair}: {e}")
 
-# =========================================================
+# =====================================================
 # MAIN LOOP
-# =========================================================
+# =====================================================
 
-while True:
+async def main():
 
-    try:
+    startup = """
+✅ <b>AI OTC SIGNAL BOT STARTED</b>
 
-        for pair in PAIRS:
+🚀 Live OTC Scanning Enabled
+⚡ Fast Scan Every 30 Seconds
+🧠 AI Candlestick Logic Activated
+"""
 
-            analyze(pair)
+    await send_telegram_message(startup)
 
-        print("Waiting 20 seconds...")
+    while True:
 
-        time.sleep(SCAN_INTERVAL)
+        try:
 
-    except Exception as e:
+            tasks = []
 
-        print("MAIN LOOP ERROR:", e)
+            for pair in PAIRS:
 
-        time.sleep(10)
+                tasks.append(
+                    process_pair(pair)
+                )
+
+            await asyncio.gather(*tasks)
+
+        except Exception as e:
+
+            print(f"MAIN LOOP ERROR: {e}")
+
+        print("Waiting 30 seconds...\n")
+
+        await asyncio.sleep(SCAN_INTERVAL)
+
+# =====================================================
+# START
+# =====================================================
+
+if __name__ == "__main__":
+
+    asyncio.run(main())
