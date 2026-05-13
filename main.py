@@ -20,21 +20,44 @@ PAIRS = {
 last_prices = {}
 
 def get_price(symbol):
-    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
 
-    response = requests.get(url).json()
+    try:
 
-    return float(
-        response["chart"]["result"][0]["meta"]["regularMarketPrice"]
-    )
+        url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
+
+        headers = {
+            "User-Agent": "Mozilla/5.0"
+        }
+
+        response = requests.get(
+            url,
+            headers=headers,
+            timeout=10
+        )
+
+        data = response.json()
+
+        price = data["chart"]["result"][0]["meta"]["regularMarketPrice"]
+
+        return float(price)
+
+    except Exception as e:
+
+        print("PRICE ERROR:", e)
+
+        return None
+
 
 def get_signal(old_price, new_price):
+
     if new_price > old_price:
         return "CALL 📈"
-    else:
-        return "PUT 📉"
+
+    return "PUT 📉"
+
 
 def get_accuracy(move):
+
     value = int(move * 100000)
 
     if value < 85:
@@ -45,6 +68,7 @@ def get_accuracy(move):
 
     return value
 
+
 print("AI SIGNAL BOT STARTED")
 
 while True:
@@ -53,11 +77,15 @@ while True:
 
         now = datetime.utcnow()
 
+        # SEND SIGNAL EXACTLY AT :50 SECOND
         if now.second == 50:
 
             for symbol, pair_name in PAIRS.items():
 
                 current_price = get_price(symbol)
+
+                if current_price is None:
+                    continue
 
                 if symbol not in last_prices:
                     last_prices[symbol] = current_price
@@ -67,6 +95,7 @@ while True:
 
                 movement = abs(current_price - old_price)
 
+                # FILTER SMALL MOVES
                 if movement < 0.0004:
                     continue
 
@@ -91,6 +120,8 @@ while True:
 🔴 Exit Time: {now.hour:02}:{exit_minute:02}:00 UTC
 
 🎯 Accuracy: {accuracy}%
+
+⚡ Duration: 1 Minute Trade
 """
 
                 bot.send_message(
@@ -98,14 +129,25 @@ while True:
                     text=signal_text
                 )
 
+                print(f"SIGNAL SENT -> {pair_name} {signal}")
+
+                # WAIT UNTIL ENTRY
                 time.sleep(10)
 
                 entry_price = get_price(symbol)
 
+                if entry_price is None:
+                    continue
+
+                # WAIT 1 MINUTE
                 time.sleep(60)
 
                 final_price = get_price(symbol)
 
+                if final_price is None:
+                    continue
+
+                # CHECK RESULT
                 if signal == "CALL 📈":
                     result = "WIN ✅" if final_price > entry_price else "LOSS ❌"
                 else:
@@ -128,6 +170,8 @@ while True:
                     text=result_text
                 )
 
+                print(f"RESULT -> {pair_name} {result}")
+
                 last_prices[symbol] = final_price
 
             time.sleep(2)
@@ -136,5 +180,7 @@ while True:
             time.sleep(1)
 
     except Exception as e:
+
         print("ERROR:", e)
+
         time.sleep(5)
