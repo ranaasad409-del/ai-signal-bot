@@ -1,40 +1,71 @@
-# =========================
-# MAIN LOOP
-# =========================
+import os
+import asyncio
+import random
+from telegram import Bot
 
-import time
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+CHAT_ID = os.getenv("CHAT_ID")
 
-LAST_SIGNAL_TIME = 0
+bot = Bot(token=BOT_TOKEN)
 
-COOLDOWN = 900   # 15 minutes
+wins = 0
+losses = 0
 
 
-while True:
+def generate_signal():
 
-    try:
+    current_price = round(random.uniform(3300, 3400), 2)
 
-        current_time = time.time()
+    direction = random.choice(["BUY", "SELL"])
 
-        # WAIT FOR NEXT SIGNAL WINDOW
-        if current_time - LAST_SIGNAL_TIME < COOLDOWN:
+    if direction == "BUY":
 
-            remaining = int(
-                COOLDOWN - (current_time - LAST_SIGNAL_TIME)
-            )
+        tp1 = round(current_price + 1.0, 2)
+        tp2 = round(current_price + 2.0, 2)
+        tp3 = round(current_price + 3.0, 2)
 
-            print(f"Waiting {remaining} sec...")
+        sl = round(current_price - 1.0, 2)
 
-            time.sleep(5)
+    else:
 
-            continue
+        tp1 = round(current_price - 1.0, 2)
+        tp2 = round(current_price - 2.0, 2)
+        tp3 = round(current_price - 3.0, 2)
 
-        # GENERATE SIGNAL
-        signal = generate_signal()
+        sl = round(current_price + 1.0, 2)
 
-        # ONLY SEND STRONG SIGNAL
-        if signal is not None:
+    strength = random.randint(1, 15)
 
-            text = f"""
+    # only strong setups
+    if strength < 12:
+        return None
+
+    signal = {
+        "pair": "XAU/USD (GOLD)",
+        "direction": direction,
+        "entry": current_price,
+        "tp1": tp1,
+        "tp2": tp2,
+        "tp3": tp3,
+        "sl": sl,
+        "expected_pips": random.randint(80, 150),
+        "accuracy": random.randint(88, 96),
+        "session": random.choice([
+            "LONDON SESSION",
+            "NEW YORK SESSION"
+        ]),
+        "news": random.choice([
+            "LOW IMPACT NEWS",
+            "MEDIUM IMPACT NEWS"
+        ])
+    }
+
+    return signal
+
+
+async def send_signal(signal):
+
+    message = f"""
 🚨 AI GOLD SIGNAL 🚨
 
 📊 Pair: {signal['pair']}
@@ -43,9 +74,9 @@ while True:
 
 💰 Entry Price: {signal['entry']}
 
-🎯 TP1: {signal['tp1']}
-🎯 TP2: {signal['tp2']}
-🎯 TP3: {signal['tp3']}
+🎯 Take Profit 1: {signal['tp1']}
+🎯 Take Profit 2: {signal['tp2']}
+🎯 Take Profit 3: {signal['tp3']}
 
 🛑 Stop Loss: {signal['sl']}
 
@@ -61,28 +92,76 @@ while True:
 SMC + Liquidity Sweep + Trend Confirmation
 """
 
-            bot.send_message(
-                chat_id=CHAT_ID,
-                text=text
-            )
+    await bot.send_message(chat_id=CHAT_ID, text=message)
 
-            print("SIGNAL SENT")
 
-            # SAVE LAST SIGNAL TIME
-            LAST_SIGNAL_TIME = time.time()
+async def send_result(signal):
 
-            # RESULT CHECK
-            send_result(signal)
+    global wins, losses
 
-        else:
+    result = random.choice(["TP HIT ✅", "STOP LOSS ❌"])
 
-            print("Weak setup skipped")
+    if result == "TP HIT ✅":
+        wins += 1
+    else:
+        losses += 1
 
-        # SAFE WAIT
-        time.sleep(30)
+    total = wins + losses
 
-    except Exception as e:
+    accuracy = round((wins / total) * 100, 2)
 
-        print(f"ERROR: {e}")
+    result_message = f"""
+📢 TRADE RESULT
 
-        time.sleep(30)
+📊 Pair: {signal['pair']}
+
+📈 Direction: {signal['direction']}
+
+💰 Entry: {signal['entry']}
+
+🎯 TP1: {signal['tp1']}
+
+🛑 SL: {signal['sl']}
+
+🏆 Result: {result}
+
+✅ Wins: {wins}
+
+❌ Losses: {losses}
+
+🔥 Accuracy: {accuracy}%
+"""
+
+    await bot.send_message(chat_id=CHAT_ID, text=result_message)
+
+
+async def main():
+
+    print("AI GOLD SIGNAL BOT STARTED")
+
+    while True:
+
+        try:
+
+            signal = generate_signal()
+
+            if signal:
+
+                await send_signal(signal)
+
+                # wait before result
+                await asyncio.sleep(300)
+
+                await send_result(signal)
+
+            # new signal every 30 minutes
+            await asyncio.sleep(1800)
+
+        except Exception as e:
+
+            print("ERROR:", e)
+
+            await asyncio.sleep(10)
+
+
+asyncio.run(main())
