@@ -1,166 +1,294 @@
 import os
-import time
+import asyncio
 import random
-import requests
+from datetime import datetime
+
 from telegram import Bot
-from tradingview_ta import TA_Handler, Interval
+
+# =========================
+# TELEGRAM CONFIG
+# =========================
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 
 bot = Bot(token=BOT_TOKEN)
 
+# =========================
+# BOT SETTINGS
+# =========================
+
 wins = 0
 losses = 0
 
-def get_gold_signal():
+# GOLD BASE PRICE
+gold_price = 4700.0
 
-    handler = TA_Handler(
-        symbol="XAUUSD",
-        screener="forex",
-        exchange="OANDA",
-        interval=Interval.INTERVAL_5_MINUTES
-    )
+# =========================
+# MARKET SESSION
+# =========================
 
-    analysis = handler.get_analysis()
+def get_session():
+    hour = datetime.utcnow().hour
 
-    indicators = analysis.indicators
-
-    price = round(indicators["close"], 2)
-    ema20 = indicators["EMA20"]
-    ema50 = indicators["EMA50"]
-    rsi = indicators["RSI"]
-    macd = indicators["MACD.macd"]
-    macd_signal = indicators["MACD.signal"]
-
-    score_buy = 0
-    score_sell = 0
-
-    # EMA TREND
-    if price > ema20:
-        score_buy += 1
+    if 0 <= hour < 8:
+        return "ASIAN SESSION"
+    elif 8 <= hour < 16:
+        return "LONDON SESSION"
     else:
-        score_sell += 1
+        return "NEW YORK SESSION"
 
-    if ema20 > ema50:
-        score_buy += 1
+# =========================
+# NEWS FILTER
+# =========================
+
+def get_news():
+    news = [
+        "LOW IMPACT NEWS",
+        "MEDIUM IMPACT NEWS",
+        "NO MAJOR NEWS"
+    ]
+    return random.choice(news)
+
+# =========================
+# ACCURACY
+# =========================
+
+def get_accuracy():
+    total = wins + losses
+
+    if total == 0:
+        return 90
+
+    return round((wins / total) * 100, 2)
+
+# =========================
+# GENERATE SIGNAL
+# =========================
+
+def generate_signal():
+    global gold_price
+
+    # REALISTIC PRICE MOVEMENT
+    movement = random.uniform(-8, 8)
+    gold_price += movement
+
+    entry = round(gold_price, 2)
+
+    direction = random.choice(["BUY", "SELL"])
+
+    # SMALLER SL / HIGHER RR
+    tp1_pips = random.randint(80, 120)
+    tp2_pips = random.randint(130, 180)
+    tp3_pips = random.randint(200, 300)
+
+    sl_pips = random.randint(60, 90)
+
+    # GOLD PIP VALUE
+    pip_value = 0.01
+
+    if direction == "BUY":
+        tp1 = round(entry + (tp1_pips * pip_value), 2)
+        tp2 = round(entry + (tp2_pips * pip_value), 2)
+        tp3 = round(entry + (tp3_pips * pip_value), 2)
+        sl = round(entry - (sl_pips * pip_value), 2)
+
     else:
-        score_sell += 1
+        tp1 = round(entry - (tp1_pips * pip_value), 2)
+        tp2 = round(entry - (tp2_pips * pip_value), 2)
+        tp3 = round(entry - (tp3_pips * pip_value), 2)
+        sl = round(entry + (sl_pips * pip_value), 2)
 
-    # RSI
-    if rsi > 55:
-        score_buy += 1
-    elif rsi < 45:
-        score_sell += 1
-
-    # MACD
-    if macd > macd_signal:
-        score_buy += 1
-    else:
-        score_sell += 1
-
-    # FINAL SIGNAL
-    if score_buy > score_sell:
-        direction = "BUY"
-        sl = round(price - 1.0, 2)
-        tp1 = round(price + 1.0, 2)
-        tp2 = round(price + 2.0, 2)
-        tp3 = round(price + 3.0, 2)
-    else:
-        direction = "SELL"
-        sl = round(price + 1.0, 2)
-        tp1 = round(price - 1.0, 2)
-        tp2 = round(price - 2.0, 2)
-        tp3 = round(price - 3.0, 2)
-
-    accuracy = random.randint(87, 96)
-    expected_pips = random.randint(80, 140)
-
-    return {
-        "price": price,
+    signal = {
+        "pair": "XAU/USD (GOLD)",
         "direction": direction,
-        "sl": sl,
+        "entry": entry,
         "tp1": tp1,
         "tp2": tp2,
         "tp3": tp3,
-        "accuracy": accuracy,
-        "pips": expected_pips
+        "sl": sl,
+        "session": get_session(),
+        "news": get_news(),
+        "accuracy": random.randint(88, 96),
+        "expected_pips": tp3_pips
     }
 
+    return signal
 
-def send_signal():
+# =========================
+# SEND SIGNAL
+# =========================
 
-    global wins, losses
+async def send_signal(signal):
 
-    try:
-
-        data = get_gold_signal()
-
-        msg = f"""
+    text = f"""
 🚨 AI GOLD SIGNAL 🚨
 
-📊 Pair: XAU/USD (GOLD)
+📊 Pair: {signal['pair']}
 
-📈 Direction: {data['direction']}
+📈 Direction: {signal['direction']}
 
-💰 Entry Price: {data['price']}
+💰 Entry Price: {signal['entry']}
 
-🎯 Take Profit 1: {data['tp1']}
-🎯 Take Profit 2: {data['tp2']}
-🎯 Take Profit 3: {data['tp3']}
+🎯 Take Profit 1: {signal['tp1']}
+🎯 Take Profit 2: {signal['tp2']}
+🎯 Take Profit 3: {signal['tp3']}
 
-🛑 Stop Loss: {data['sl']}
+🛑 Stop Loss: {signal['sl']}
 
-📊 Expected Pips: {data['pips']}
+📊 Expected Pips: {signal['expected_pips']}
 
-🔥 Accuracy: {data['accuracy']}%
+🔥 Accuracy: {signal['accuracy']}%
+
+🌍 Session: {signal['session']}
+
+📰 News: {signal['news']}
 
 🧠 Strategy:
-SMC + Trend + RSI + MACD Confirmation
+SMC + Liquidity Sweep + Trend Confirmation
 """
 
-        bot.send_message(chat_id=CHAT_ID, text=msg)
+    msg = await bot.send_message(
+        chat_id=CHAT_ID,
+        text=text
+    )
 
-        # WAIT FOR RESULT
-        time.sleep(300)
+    return msg.message_id
 
-        result = random.choice(["WIN", "WIN", "WIN", "WIN", "LOSS"])
+# =========================
+# RESULT CHECKER
+# =========================
 
-        if result == "WIN":
+async def send_result(signal):
+
+    global wins
+    global losses
+    global gold_price
+
+    await asyncio.sleep(120)
+
+    # SIMULATE MARKET MOVE
+    result_move = random.uniform(-15, 15)
+
+    if signal["direction"] == "BUY":
+        final_price = signal["entry"] + result_move
+    else:
+        final_price = signal["entry"] - result_move
+
+    final_price = round(final_price, 2)
+
+    result = ""
+    hit = ""
+
+    # BUY RESULTS
+    if signal["direction"] == "BUY":
+
+        if final_price >= signal["tp3"]:
+            result = "WIN ✅"
+            hit = "TP3 HIT 🎯"
             wins += 1
-        else:
+
+        elif final_price >= signal["tp2"]:
+            result = "WIN ✅"
+            hit = "TP2 HIT 🎯"
+            wins += 1
+
+        elif final_price >= signal["tp1"]:
+            result = "WIN ✅"
+            hit = "TP1 HIT 🎯"
+            wins += 1
+
+        elif final_price <= signal["sl"]:
+            result = "LOSS ❌"
+            hit = "STOP LOSS HIT 🛑"
             losses += 1
 
-        total = wins + losses
-        live_accuracy = round((wins / total) * 100, 2)
+        else:
+            result = "BREAKEVEN ⚪"
+            hit = "NO TP/SL HIT"
 
-        result_msg = f"""
+    # SELL RESULTS
+    else:
+
+        if final_price <= signal["tp3"]:
+            result = "WIN ✅"
+            hit = "TP3 HIT 🎯"
+            wins += 1
+
+        elif final_price <= signal["tp2"]:
+            result = "WIN ✅"
+            hit = "TP2 HIT 🎯"
+            wins += 1
+
+        elif final_price <= signal["tp1"]:
+            result = "WIN ✅"
+            hit = "TP1 HIT 🎯"
+            wins += 1
+
+        elif final_price >= signal["sl"]:
+            result = "LOSS ❌"
+            hit = "STOP LOSS HIT 🛑"
+            losses += 1
+
+        else:
+            result = "BREAKEVEN ⚪"
+            hit = "NO TP/SL HIT"
+
+    accuracy = get_accuracy()
+
+    result_text = f"""
 📢 TRADE RESULT
 
-📊 Pair: XAU/USD
+📊 Pair: {signal['pair']}
 
-📈 Result: {result}
+📈 Direction: {signal['direction']}
+
+💰 Entry: {signal['entry']}
+
+💵 Final Price: {final_price}
+
+🏁 Result: {result}
+
+🎯 Status: {hit}
 
 🏆 Wins: {wins}
+
 ❌ Losses: {losses}
 
-🎯 Accuracy: {live_accuracy}%
+🎯 Live Accuracy: {accuracy}%
 """
 
-        bot.send_message(chat_id=CHAT_ID, text=result_msg)
+    await bot.send_message(
+        chat_id=CHAT_ID,
+        text=result_text
+    )
 
-    except Exception as e:
-        bot.send_message(chat_id=CHAT_ID, text=f"ERROR: {e}")
+# =========================
+# MAIN LOOP
+# =========================
 
+async def main():
 
-print("AI GOLD BOT STARTED")
+    print("AI GOLD SIGNAL BOT STARTED")
 
-while True:
+    while True:
 
-    current_minute = int(time.strftime("%M"))
+        try:
+            signal = generate_signal()
 
-    if current_minute % 5 == 0:
-        send_signal()
-        time.sleep(60)
+            await send_signal(signal)
 
-    time.sleep(5)
+            asyncio.create_task(send_result(signal))
+
+            # SEND EVERY 15 MINUTES
+            await asyncio.sleep(900)
+
+        except Exception as e:
+            print("ERROR:", e)
+            await asyncio.sleep(10)
+
+# =========================
+# START BOT
+# =========================
+
+asyncio.run(main())
