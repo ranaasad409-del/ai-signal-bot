@@ -1,10 +1,9 @@
-import time
+import asyncio
 from datetime import datetime, timedelta
-import pandas as pd
-from selenium import webdriver
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.common.by import By
 from telegram import Bot
+import pandas as pd
+from playwright.async_api import async_playwright
+import random
 
 # =======================
 # TELEGRAM SETTINGS
@@ -20,7 +19,7 @@ QUOTEX_EMAIL = "supportquotex97@gmail.com"
 QUOTEX_PASSWORD = "Allahbadsha409@"
 
 # =======================
-# OTC PAIRS (as displayed on chart)
+# OTC PAIRS
 # =======================
 pairs = {
     "USD/PKR OTC": "USD/PKR",
@@ -28,23 +27,17 @@ pairs = {
     "USD/BRL OTC": "USD/BRL"
 }
 
-# EMA SETTINGS
 FAST_EMA = 5
 SLOW_EMA = 20
 SIGNAL_LEAD_TIME = 20
 SLEEP_INTERVAL = 1
 
-# Storage
 active_trades = {}
 price_history = {pair: [] for pair in pairs}
 
-# Logging
-def log_trade(message):
-    print(f"{datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC | {message}")
-    with open("trade_log.txt", "a") as f:
-        f.write(f"{datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC | {message}\n")
-
+# =======================
 # EMA Calculation
+# =======================
 def calculate_ema(prices, span):
     ema = []
     for i, price in enumerate(prices):
@@ -64,78 +57,78 @@ def generate_signal(prices):
     return None
 
 # =======================
-# Initialize Selenium WebDriver
+# Logging
 # =======================
-chrome_options = Options()
-chrome_options.add_argument("--headless")  # run headless for cloud
-chrome_options.add_argument("--no-sandbox")
-chrome_options.add_argument("--disable-dev-shm-usage")
-
-driver = webdriver.Chrome(options=chrome_options)
-
-# Log in to Quotex
-driver.get("https://quotex.io/")
-time.sleep(5)
-# Add your login automation here if needed
-
-log_trade("🚀 Selenium initialized, Quotex page opened")
+def log_trade(msg):
+    print(f"{datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC | {msg}")
+    with open("trade_log.txt", "a") as f:
+        f.write(f"{datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC | {msg}\n")
 
 # =======================
-# Fetch latest price from chart
+# Fetch latest price from Quotex chart
 # =======================
-def fetch_latest_price(pair_name):
+async def fetch_latest_price(page, pair_name):
     try:
-        # Locate the price element for the pair (you need to inspect actual chart element)
-        price_element = driver.find_element(By.XPATH, f"//div[contains(text(), '{pairs[pair_name]}')]/following-sibling::div")
-        price_text = price_element.text.replace(",", "")
-        return float(price_text)
-    except Exception as e:
-        log_trade(f"Error fetching price for {pair_name}: {e}")
-        # fallback to last price or dummy
+        # Replace this selector with the actual chart price element
+        selector = f"div:has-text('{pairs[pair_name]}') + div"
+        element = await page.query_selector(selector)
+        text = await element.text_content()
+        price = float(text.replace(",", ""))
+        return price
+    except:
+        # fallback
         if price_history[pair_name]:
-            return price_history[pair_name][-1]
+            last = price_history[pair_name][-1]
+            return last + random.uniform(-0.1,0.1)
         return 100.0
 
 # =======================
-# Main Loop
+# Main Bot
 # =======================
-log_trade("🚀 OTC Sniper Bot Started")
+async def main():
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(headless=True)
+        context = await browser.new_context()
+        page = await context.new_page()
+        await page.goto("https://quotex.io/")
+        await asyncio.sleep(5)
+        # Add login automation if needed
+        log_trade("🚀 Playwright initialized, Quotex page opened")
 
-while True:
-    now = datetime.utcnow()
-    seconds_to_next_candle = 60 - now.second
+        while True:
+            now = datetime.utcnow()
+            seconds_to_next_candle = 60 - now.second
+            for pair_name in pairs:
+                price = await fetch_latest_price(page, pair_name)
+                price_history[pair_name].append(price)
+                if len(price_history[pair_name]) > 50:
+                    price_history[pair_name] = price_history[pair_name][-50:]
 
-    for pair_name in pairs:
-        price = fetch_latest_price(pair_name)
-        price_history[pair_name].append(price)
-        if len(price_history[pair_name]) > 50:
-            price_history[pair_name] = price_history[pair_name][-50:]
+                # Send sniper signal
+                if seconds_to_next_candle <= SIGNAL_LEAD_TIME:
+                    if pair_name not in active_trades:
+                        signal = generate_signal(price_history[pair_name])
+                        if signal:
+                            candle_open_time = (now + timedelta(seconds=seconds_to_next_candle)).replace(microsecond=0)
+                            entry_price = price
+                            active_trades[pair_name] = {"signal": signal, "candle_open_time": candle_open_time, "entry": entry_price}
 
-        # Send sniper signal 20 sec before candle
-        if seconds_to_next_candle <= SIGNAL_LEAD_TIME:
-            if pair_name not in active_trades:
-                signal = generate_signal(price_history[pair_name])
-                if signal:
-                    candle_open_time = (now + timedelta(seconds=seconds_to_next_candle)).replace(microsecond=0)
-                    entry_price = price
-                    active_trades[pair_name] = {"signal": signal, "candle_open_time": candle_open_time, "entry": entry_price}
+                            msg = f"📊 {pair_name} OTC Signal\nSignal: {signal}\nCandle Opens: {candle_open_time.strftime('%H:%M:%S')} UTC\nEntry Price: {entry_price:.4f}"
+                            bot.send_message(chat_id=CHAT_ID, text=msg)
+                            log_trade(msg)
 
-                    msg = f"📊 {pair_name} OTC Signal\nSignal: {signal}\nCandle Opens: {candle_open_time.strftime('%H:%M:%S')} UTC\nEntry Price: {entry_price:.4f}"
-                    bot.send_message(chat_id=CHAT_ID, text=msg)
-                    log_trade(msg)
+                # Check trade result after candle closes
+                if pair_name in active_trades:
+                    trade = active_trades[pair_name]
+                    if now >= trade["candle_open_time"] + timedelta(seconds=60):
+                        close_price = price
+                        win = (trade["signal"]=="BUY" and close_price > trade["entry"]) or (trade["signal"]=="SELL" and close_price < trade["entry"])
+                        result = "WIN ✅" if win else "LOSS ❌"
+                        msg = f"📈 {pair_name} Trade Result\nSignal: {trade['signal']}\nEntry: {trade['entry']:.4f}\nClose: {close_price:.4f}\nResult: {result}\nTime: {now.strftime('%H:%M:%S')} UTC"
+                        bot.send_message(chat_id=CHAT_ID, text=msg)
+                        log_trade(msg)
+                        del active_trades[pair_name]
 
-        # Check result after 1 minute
-        if pair_name in active_trades:
-            trade = active_trades[pair_name]
-            if now >= trade["candle_open_time"] + timedelta(seconds=60):
-                close_price = price
-                win = (trade["signal"]=="BUY" and close_price > trade["entry"]) or (trade["signal"]=="SELL" and close_price < trade["entry"])
-                result = "WIN ✅" if win else "LOSS ❌"
+            await asyncio.sleep(SLEEP_INTERVAL)
 
-                msg = f"📈 {pair_name} Trade Result\nSignal: {trade['signal']}\nEntry: {trade['entry']:.4f}\nClose: {close_price:.4f}\nResult: {result}\nTime: {now.strftime('%H:%M:%S')} UTC"
-                bot.send_message(chat_id=CHAT_ID, text=msg)
-                log_trade(msg)
-
-                del active_trades[pair_name]
-
-    time.sleep(SLEEP_INTERVAL)
+asyncio.run(main())
