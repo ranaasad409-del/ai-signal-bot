@@ -13,12 +13,12 @@ BOT_TOKEN = "8689634513:AAFm5KBhu2pPnwcwPnTyvS8C1BAUS9YIK7Q"
 CHAT_ID = "5974354691"
 
 # =====================================
-# GOLD MARKET SETTINGS
+# MARKET SETTINGS
 # =====================================
 
 SYMBOL = "GC=F"   # GOLD FUTURES
 
-CHECK_INTERVAL = 60  # seconds
+CHECK_INTERVAL = 60
 
 # =====================================
 # TELEGRAM FUNCTION
@@ -35,7 +35,15 @@ def send_telegram(message):
 
     try:
 
-        requests.post(url, data=payload)
+        response = requests.post(
+            url,
+            data=payload,
+            timeout=10
+        )
+
+        print("TELEGRAM STATUS:", response.status_code)
+
+        print("TELEGRAM RESPONSE:", response.text)
 
     except Exception as e:
 
@@ -53,10 +61,11 @@ def get_data():
             tickers=SYMBOL,
             interval="1m",
             period="1d",
-            progress=False
+            progress=False,
+            auto_adjust=False
         )
 
-        # CHECK EMPTY DATA
+        # CHECK EMPTY
 
         if df.empty:
 
@@ -64,37 +73,23 @@ def get_data():
 
             return None
 
+        # FIX MULTIINDEX
+
+        if isinstance(df.columns, pd.MultiIndex):
+
+            df.columns = df.columns.get_level_values(0)
+
         # RESET INDEX
 
         df.reset_index(inplace=True)
 
-        # DEBUG COLUMNS
-
-        print("COLUMNS:", df.columns)
-
-        # LOWERCASE COLUMN NAMES
+        # LOWERCASE COLUMNS
 
         df.columns = [str(col).lower() for col in df.columns]
 
-        # HANDLE DATE COLUMN
+        print("COLUMNS:", df.columns)
 
-        if "datetime" not in df.columns:
-
-            if "date" in df.columns:
-
-                df.rename(
-                    columns={"date": "datetime"},
-                    inplace=True
-                )
-
-            elif "index" in df.columns:
-
-                df.rename(
-                    columns={"index": "datetime"},
-                    inplace=True
-                )
-
-        # REQUIRED NUMERIC COLUMNS
+        # CONVERT TO NUMBERS
 
         numeric_cols = [
             "open",
@@ -103,8 +98,6 @@ def get_data():
             "close",
             "volume"
         ]
-
-        # CONVERT TO NUMBERS
 
         for col in numeric_cols:
 
@@ -140,7 +133,7 @@ def analyze_market():
         return
 
     # =====================================
-    # TECHNICAL INDICATORS
+    # INDICATORS
     # =====================================
 
     df["ema20"] = ta.trend.EMAIndicator(
@@ -292,6 +285,10 @@ def analyze_market():
 # =====================================
 
 print("AI GOLD BOT STARTED")
+
+# TEST TELEGRAM
+
+send_telegram("✅ AI GOLD BOT CONNECTED SUCCESSFULLY")
 
 # =====================================
 # MAIN LOOP
