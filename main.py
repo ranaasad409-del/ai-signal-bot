@@ -1,60 +1,110 @@
-import asyncio
-import random
-from datetime import datetime
-
+import time
+import requests
 import pandas as pd
 import ta
-import yfinance as yf
+from datetime import datetime
 
-from telegram import Bot
-
-# =========================================
+# =========================
 # TELEGRAM SETTINGS
-# =========================================
+# =========================
 
 BOT_TOKEN = "8689634513:AAFm5KBhu2pPnwcwPnTyvS8C1BAUS9YIK7Q"
 CHAT_ID = "5974354691"
 
-bot = Bot(token=BOT_TOKEN)
+# =========================
+# MARKET SETTINGS
+# =========================
 
-# =========================================
-# LIVE STATS
-# =========================================
+SYMBOL = "XAUUSD"
+TIMEFRAME = "1m"
 
-wins = 0
-losses = 0
+# =========================
+# TELEGRAM FUNCTION
+# =========================
 
-# =========================================
-# MARKET ANALYSIS
-# =========================================
+def send_telegram(message):
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+
+    data = {
+        "chat_id": CHAT_ID,
+        "text": message
+    }
+
+    try:
+        requests.post(url, data=data)
+    except Exception as e:
+        print("Telegram Error:", e)
+
+# =========================
+# GET MARKET DATA
+# =========================
+
+def get_data():
+
+    # Example Binance Gold Proxy
+    url = "https://api.binance.com/api/v3/klines?symbol=XAUUSDT&interval=1m&limit=150"
+
+    data = requests.get(url).json()
+
+    df = pd.DataFrame(data)
+
+    df = df.iloc[:, :6]
+
+    df.columns = [
+        "time",
+        "open",
+        "high",
+        "low",
+        "close",
+        "volume"
+    ]
+
+    df["close"] = df["close"].astype(float)
+    df["high"] = df["high"].astype(float)
+    df["low"] = df["low"].astype(float)
+    df["volume"] = df["volume"].astype(float)
+
+    return df
+
+# =========================
+# MAIN STRATEGY
+# =========================
 
 def analyze_market():
 
-    gold = yf.Ticker("GC=F")
+    df = get_data()
 
-    df = gold.history(period="2d", interval="5m")
-
-    if len(df) < 100:
-        return None
-
-    # =====================================
+    # =========================
     # INDICATORS
-    # =====================================
+    # =========================
 
-    df["ema20"] = ta.trend.ema_indicator(df["Close"], window=20)
-    df["ema50"] = ta.trend.ema_indicator(df["Close"], window=50)
+    df["ema20"] = ta.trend.EMAIndicator(
+        close=df["close"],
+        window=20
+    ).ema_indicator()
 
-    df["rsi"] = ta.momentum.rsi(df["Close"], window=14)
+    df["ema50"] = ta.trend.EMAIndicator(
+        close=df["close"],
+        window=50
+    ).ema_indicator()
 
-    macd = ta.trend.MACD(df["Close"])
+    df["rsi"] = ta.momentum.RSIIndicator(
+        close=df["close"],
+        window=14
+    ).rsi()
+
+    macd = ta.trend.MACD(df["close"])
+
     df["macd"] = macd.macd()
     df["macd_signal"] = macd.macd_signal()
 
-    df["volume_ma"] = df["Volume"].rolling(20).mean()
+    # =========================
+    # LATEST CANDLE
+    # =========================
 
     latest = df.iloc[-1]
 
-    price = round(float(latest["Close"]), 2)
+    close = latest["close"]
 
     ema20 = latest["ema20"]
     ema50 = latest["ema50"]
@@ -64,206 +114,113 @@ def analyze_market():
     macd_value = latest["macd"]
     macd_signal = latest["macd_signal"]
 
-    volume = latest["Volume"]
-    avg_volume = latest["volume_ma"]
+    # =========================
+    # BUY SCORE
+    # =========================
 
-    high_prev = df["High"].iloc[-10:-1].max()
-    low_prev = df["Low"].iloc[-10:-1].min()
+    buy_score = 0
 
-    # =====================================
-    # BUY CONDITIONS
-    # =====================================
+    if ema20 > ema50:
+        buy_score += 1
 
-    buy_signal = (
-        price > ema20 and
-        ema20 > ema50 and
-        rsi > 55 and
-        macd_value > macd_signal and
-        volume > avg_volume and
-        price > high_prev
-    )
+    if rsi > 50:
+        buy_score += 1
 
-    # =====================================
-    # SELL CONDITIONS
-    # =====================================
+    if macd_value > macd_signal:
+        buy_score += 1
 
-    sell_signal = (
-        price < ema20 and
-        ema20 < ema50 and
-        rsi < 45 and
-        macd_value < macd_signal and
-        volume > avg_volume and
-        price < low_prev
-    )
+    if close > ema20:
+        buy_score += 1
 
-    # =====================================
-    # SIGNAL CREATION
-    # =====================================
+    # =========================
+    # SELL SCORE
+    # =========================
 
-    if buy_signal:
+    sell_score = 0
 
-        direction = "BUY"
+    if ema20 < ema50:
+        sell_score += 1
 
-        sl = round(price - 8, 2)
+    if rsi < 50:
+        sell_score += 1
 
-        tp1 = round(price + 10, 2)
-        tp2 = round(price + 20, 2)
-        tp3 = round(price + 35, 2)
+    if macd_value < macd_signal:
+        sell_score += 1
 
-        accuracy = random.randint(90, 95)
+    if close < ema20:
+        sell_score += 1
 
-    elif sell_signal:
+    # =========================
+    # SIGNAL GENERATION
+    # =========================
 
-        direction = "SELL"
+    signal = None
 
-        sl = round(price + 8, 2)
+    if buy_score >= 3:
+        signal = "BUY"
 
-        tp1 = round(price - 10, 2)
-        tp2 = round(price - 20, 2)
-        tp3 = round(price - 35, 2)
+    elif sell_score >= 3:
+        signal = "SELL"
 
-        accuracy = random.randint(90, 95)
+    # =========================
+    # TP & SL
+    # =========================
 
-    else:
-        return None
+    if signal == "BUY":
 
-    return {
-        "price": price,
-        "direction": direction,
-        "tp1": tp1,
-        "tp2": tp2,
-        "tp3": tp3,
-        "sl": sl,
-        "accuracy": accuracy
-    }
+        entry = close
+        stop_loss = round(entry - 5, 2)
+        take_profit = round(entry + 10, 2)
 
-# =========================================
-# RESULT CHECKER
-# =========================================
+    elif signal == "SELL":
 
-async def check_result(signal):
+        entry = close
+        stop_loss = round(entry + 5, 2)
+        take_profit = round(entry - 10, 2)
 
-    global wins, losses
+    # =========================
+    # SEND SIGNAL
+    # =========================
 
-    await asyncio.sleep(300)
+    if signal:
 
-    gold = yf.Ticker("GC=F")
+        message = f"""
+🔥 AI GOLD SNIPER SIGNAL 🔥
 
-    df = gold.history(period="1d", interval="1m")
+📊 Symbol: {SYMBOL}
+📈 Signal: {signal}
 
-    if len(df) == 0:
-        return
+🎯 Entry: {entry}
+🛑 Stop Loss: {stop_loss}
+💰 Take Profit: {take_profit}
 
-    close_price = round(float(df["Close"].iloc[-1]), 2)
+📉 RSI: {round(rsi,2)}
 
-    entry = signal["price"]
-
-    direction = signal["direction"]
-
-    tp1 = signal["tp1"]
-
-    result = "LOSS ❌"
-
-    if direction == "BUY":
-
-        if close_price >= tp1:
-            result = "WIN ✅"
-            wins += 1
-        else:
-            losses += 1
-
-    else:
-
-        if close_price <= tp1:
-            result = "WIN ✅"
-            wins += 1
-        else:
-            losses += 1
-
-    total = wins + losses
-
-    accuracy = round((wins / total) * 100, 2) if total > 0 else 0
-
-    result_message = f"""
-📢 TRADE RESULT
-
-📊 Pair: XAU/USD (GOLD)
-
-📈 Direction: {direction}
-
-💰 Entry Price: {entry}
-
-💵 Closed Price: {close_price}
-
-🏁 Result: {result}
-
-🏆 Wins: {wins}
-❌ Losses: {losses}
-
-🎯 Live Accuracy: {accuracy}%
+🕒 Time:
+{datetime.now()}
 """
 
-    await bot.send_message(chat_id=CHAT_ID, text=result_message)
+        print(message)
 
-# =========================================
-# SEND SIGNAL
-# =========================================
+        send_telegram(message)
 
-async def send_signal():
-
-    signal = analyze_market()
-
-    if signal is None:
+    else:
         print("No strong setup found")
-        return
 
-    message = f"""
-🚨 AI GOLD SIGNAL 🚨
+# =========================
+# BOT LOOP
+# =========================
 
-📊 Pair: XAU/USD (GOLD)
+print("AI GOLD BOT STARTED")
 
-📈 Direction: {signal['direction']}
+while True:
 
-💰 Entry Price: {signal['price']}
+    try:
 
-🎯 Take Profit 1: {signal['tp1']}
-🎯 Take Profit 2: {signal['tp2']}
-🎯 Take Profit 3: {signal['tp3']}
+        analyze_market()
 
-🛑 Stop Loss: {signal['sl']}
+    except Exception as e:
 
-🔥 Accuracy: {signal['accuracy']}%
+        print("ERROR:", e)
 
-🧠 Strategy:
-SMC + EMA Trend + RSI + MACD + Volume + Breakout Confirmation
-"""
-
-    await bot.send_message(chat_id=CHAT_ID, text=message)
-
-    asyncio.create_task(check_result(signal))
-
-# =========================================
-# MAIN LOOP
-# =========================================
-
-async def main():
-
-    print("AI GOLD BOT STARTED")
-
-    while True:
-
-        try:
-
-            await send_signal()
-
-        except Exception as e:
-
-            print("ERROR:", e)
-
-        await asyncio.sleep(600)
-
-# =========================================
-# START BOT
-# =========================================
-
-asyncio.run(main())
+    time.sleep(60)
