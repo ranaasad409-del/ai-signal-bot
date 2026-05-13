@@ -5,24 +5,24 @@ import ta
 import yfinance as yf
 from datetime import datetime
 
-# =========================
+# =====================================
 # TELEGRAM SETTINGS
-# =========================
+# =====================================
 
 BOT_TOKEN = "8689634513:AAFm5KBhu2pPnwcwPnTyvS8C1BAUS9YIK7Q"
 CHAT_ID = "5974354691"
 
-# =========================
+# =====================================
 # GOLD MARKET SETTINGS
-# =========================
+# =====================================
 
 SYMBOL = "GC=F"   # GOLD FUTURES
 
 CHECK_INTERVAL = 60  # seconds
 
-# =========================
+# =====================================
 # TELEGRAM FUNCTION
-# =========================
+# =====================================
 
 def send_telegram(message):
 
@@ -41,9 +41,9 @@ def send_telegram(message):
 
         print("Telegram Error:", e)
 
-# =========================
+# =====================================
 # GET MARKET DATA
-# =========================
+# =====================================
 
 def get_data():
 
@@ -56,6 +56,8 @@ def get_data():
             progress=False
         )
 
+        # CHECK EMPTY DATA
+
         if df.empty:
 
             print("No market data found")
@@ -66,22 +68,33 @@ def get_data():
 
         df.reset_index(inplace=True)
 
-        # LOWERCASE COLUMNS
+        # DEBUG COLUMNS
+
+        print("COLUMNS:", df.columns)
+
+        # LOWERCASE COLUMN NAMES
 
         df.columns = [str(col).lower() for col in df.columns]
 
-        # KEEP REQUIRED COLUMNS
+        # HANDLE DATE COLUMN
 
-        df = df[[
-            "datetime",
-            "open",
-            "high",
-            "low",
-            "close",
-            "volume"
-        ]]
+        if "datetime" not in df.columns:
 
-        # CONVERT TO FLOAT
+            if "date" in df.columns:
+
+                df.rename(
+                    columns={"date": "datetime"},
+                    inplace=True
+                )
+
+            elif "index" in df.columns:
+
+                df.rename(
+                    columns={"index": "datetime"},
+                    inplace=True
+                )
+
+        # REQUIRED NUMERIC COLUMNS
 
         numeric_cols = [
             "open",
@@ -91,12 +104,16 @@ def get_data():
             "volume"
         ]
 
+        # CONVERT TO NUMBERS
+
         for col in numeric_cols:
 
-            df[col] = pd.to_numeric(
-                df[col],
-                errors="coerce"
-            )
+            if col in df.columns:
+
+                df[col] = pd.to_numeric(
+                    df[col],
+                    errors="coerce"
+                )
 
         # REMOVE EMPTY VALUES
 
@@ -110,9 +127,9 @@ def get_data():
 
         return None
 
-# =========================
+# =====================================
 # ANALYZE MARKET
-# =========================
+# =====================================
 
 def analyze_market():
 
@@ -122,9 +139,9 @@ def analyze_market():
 
         return
 
-    # =========================
-    # INDICATORS
-    # =========================
+    # =====================================
+    # TECHNICAL INDICATORS
+    # =====================================
 
     df["ema20"] = ta.trend.EMAIndicator(
         close=df["close"],
@@ -149,9 +166,9 @@ def analyze_market():
 
     df["macd_signal"] = macd.macd_signal()
 
-    # =========================
+    # =====================================
     # LATEST CANDLE
-    # =========================
+    # =====================================
 
     latest = df.iloc[-1]
 
@@ -167,9 +184,9 @@ def analyze_market():
 
     macd_signal = latest["macd_signal"]
 
-    # =========================
-    # BUY SCORE
-    # =========================
+    # =====================================
+    # BUY CONDITIONS
+    # =====================================
 
     buy_score = 0
 
@@ -185,9 +202,9 @@ def analyze_market():
     if close > ema20:
         buy_score += 1
 
-    # =========================
-    # SELL SCORE
-    # =========================
+    # =====================================
+    # SELL CONDITIONS
+    # =====================================
 
     sell_score = 0
 
@@ -203,9 +220,9 @@ def analyze_market():
     if close < ema20:
         sell_score += 1
 
-    # =========================
+    # =====================================
     # FINAL SIGNAL
-    # =========================
+    # =====================================
 
     signal = None
 
@@ -217,9 +234,9 @@ def analyze_market():
 
         signal = "SELL"
 
-    # =========================
+    # =====================================
     # TP / SL
-    # =========================
+    # =====================================
 
     if signal == "BUY":
 
@@ -237,9 +254,9 @@ def analyze_market():
 
         take_profit = round(entry - 10, 2)
 
-    # =========================
+    # =====================================
     # SEND SIGNAL
-    # =========================
+    # =====================================
 
     if signal:
 
@@ -270,15 +287,15 @@ def analyze_market():
 
         print("No strong setup found")
 
-# =========================
+# =====================================
 # START BOT
-# =========================
+# =====================================
 
 print("AI GOLD BOT STARTED")
 
-# =========================
+# =====================================
 # MAIN LOOP
-# =========================
+# =====================================
 
 while True:
 
