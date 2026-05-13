@@ -3,40 +3,41 @@ import os
 import requests
 import pandas as pd
 import ta
-import yfinance as yf
-from datetime import datetime
+from tvDatafeed import TvDatafeed, Interval
 
 # =====================================
 # TELEGRAM SETTINGS
 # =====================================
 
-# AUTO LOAD FROM RAILWAY VARIABLES
-
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-
 CHAT_ID = os.getenv("CHAT_ID")
 
 # =====================================
 # MARKET SETTINGS
 # =====================================
 
-SYMBOL = "GC=F"   # GOLD FUTURES
+SYMBOL = "XAUUSD"
+EXCHANGE = "OANDA"
 
 CHECK_INTERVAL = 60
 
 # =====================================
-# DUPLICATE SIGNAL PROTECTION
+# SIGNAL MEMORY
 # =====================================
 
 last_signal = None
+
+# =====================================
+# CONNECT TRADINGVIEW
+# =====================================
+
+tv = TvDatafeed()
 
 # =====================================
 # TELEGRAM FUNCTION
 # =====================================
 
 def send_telegram(message):
-
-    # CHECK VARIABLES
 
     if not BOT_TOKEN or not CHAT_ID:
 
@@ -59,74 +60,34 @@ def send_telegram(message):
             timeout=10
         )
 
-        print("TELEGRAM STATUS:", response.status_code)
-
-        print("TELEGRAM RESPONSE:", response.text)
+        print("TELEGRAM:", response.status_code)
 
     except Exception as e:
 
         print("Telegram Error:", e)
 
 # =====================================
-# GET MARKET DATA
+# GET REAL TRADINGVIEW DATA
 # =====================================
 
 def get_data():
 
     try:
 
-        df = yf.download(
-            tickers=SYMBOL,
-            interval="1m",
-            period="1d",
-            progress=False,
-            auto_adjust=False
+        df = tv.get_hist(
+            symbol=SYMBOL,
+            exchange=EXCHANGE,
+            interval=Interval.in_1_minute,
+            n_bars=200
         )
 
-        if df.empty:
+        if df is None or df.empty:
 
-            print("No market data found")
+            print("No market data")
 
             return None
 
-        # FIX MULTIINDEX
-
-        if isinstance(df.columns, pd.MultiIndex):
-
-            df.columns = df.columns.get_level_values(0)
-
-        # RESET INDEX
-
         df.reset_index(inplace=True)
-
-        # LOWERCASE COLUMNS
-
-        df.columns = [str(col).lower() for col in df.columns]
-
-        print("COLUMNS:", df.columns)
-
-        # CONVERT TO NUMBERS
-
-        numeric_cols = [
-            "open",
-            "high",
-            "low",
-            "close",
-            "volume"
-        ]
-
-        for col in numeric_cols:
-
-            if col in df.columns:
-
-                df[col] = pd.to_numeric(
-                    df[col],
-                    errors="coerce"
-                )
-
-        # REMOVE EMPTY VALUES
-
-        df.dropna(inplace=True)
 
         return df
 
@@ -185,8 +146,6 @@ def analyze_market():
 
     close = float(latest["close"])
 
-    print("LIVE PRICE:", close)
-
     ema20 = latest["ema20"]
 
     ema50 = latest["ema50"]
@@ -198,10 +157,12 @@ def analyze_market():
     macd_signal = latest["macd_signal"]
 
     # =====================================
-    # BUY CONDITIONS
+    # SIGNAL LOGIC
     # =====================================
 
     buy_score = 0
+
+    sell_score = 0
 
     if ema20 > ema50:
         buy_score += 1
@@ -214,12 +175,6 @@ def analyze_market():
 
     if close > ema20:
         buy_score += 1
-
-    # =====================================
-    # SELL CONDITIONS
-    # =====================================
-
-    sell_score = 0
 
     if ema20 < ema50:
         sell_score += 1
@@ -247,8 +202,14 @@ def analyze_market():
 
         signal = "SELL"
 
+    else:
+
+        print("No strong setup")
+
+        return
+
     # =====================================
-    # PREVENT DUPLICATES
+    # SKIP DUPLICATES
     # =====================================
 
     if signal == last_signal:
@@ -260,78 +221,54 @@ def analyze_market():
     last_signal = signal
 
     # =====================================
-    # TP / SL CALCULATION
+    # ENTRY / TP / SL
     # =====================================
 
-    risk_percent = 0.002
-    reward_percent = 0.004
+    entry = round(close, 2)
+
+    sl_points = 15
+    tp_points = 30
 
     if signal == "BUY":
 
-        entry = round(close, 2)
-
-        stop_loss = round(
-            entry * (1 - risk_percent),
+        tp = round(
+            entry + tp_points,
             2
         )
 
-        take_profit = round(
-            entry * (1 + reward_percent),
+        sl = round(
+            entry - sl_points,
             2
         )
 
     elif signal == "SELL":
 
-        entry = round(close, 2)
-
-        stop_loss = round(
-            entry * (1 + risk_percent),
+        tp = round(
+            entry - tp_points,
             2
         )
 
-        take_profit = round(
-            entry * (1 - reward_percent),
+        sl = round(
+            entry + sl_points,
             2
         )
 
-    else:
-
-        print("No strong setup found")
-
-        return
+    print(
+        f"{signal} | Entry={entry} | TP={tp} | SL={sl}"
+    )
 
     # =====================================
-    # SIGNAL CONFIDENCE
-    # =====================================
-
-    confidence = max(
-        buy_score,
-        sell_score
-    ) * 25
-
-    # =====================================
-    # TELEGRAM MESSAGE
+    # CLEAN TELEGRAM MESSAGE
     # =====================================
 
     message = f"""
-🔥 AI GOLD SNIPER SIGNAL 🔥
+{signal} XAUUSD
 
-📊 Symbol: GOLD (GC=F)
+Entry: {entry}
 
-📈 Signal: {signal}
+TP: {tp}
 
-🎯 Entry: {entry}
-
-🛑 Stop Loss: {stop_loss}
-
-💰 Take Profit: {take_profit}
-
-📉 RSI: {round(rsi, 2)}
-
-⚡ Confidence: {confidence}%
-
-🕒 Time:
-{datetime.now()}
+SL: {sl}
 """
 
     print(message)
@@ -344,7 +281,7 @@ def analyze_market():
 
 print("AI GOLD BOT STARTED")
 
-send_telegram("✅ AI GOLD BOT CONNECTED SUCCESSFULLY")
+send_telegram("AI GOLD BOT CONNECTED")
 
 # =====================================
 # MAIN LOOP
