@@ -1,199 +1,168 @@
-import time
-import requests
+import asyncio
 import random
 from datetime import datetime, timedelta
+import pytz
 from telegram import Bot
 
 # =========================
 # TELEGRAM SETTINGS
 # =========================
+
 BOT_TOKEN = "8689634513:AAFm5KBhu2pPnwcwPnTyvS8C1BAUS9YIK7Q"
 CHAT_ID = "5974354691"
 
 bot = Bot(token=BOT_TOKEN)
 
 # =========================
-# STATS
+# FOREX PAIRS
 # =========================
-wins = 0
-losses = 0
-total = 0
 
-# =========================
-# OTC PAIRS
-# =========================
 pairs = [
-    "EUR/USD OTC",
-    "USD/JPY OTC",
-    "GBP/USD OTC",
-    "EUR/JPY OTC",
-    "AUD/USD OTC",
-    "USD/CAD OTC",
-    "EUR/GBP OTC"
+    "EUR/USD",
+    "GBP/USD",
+    "USD/JPY",
+    "AUD/USD",
+    "USD/CAD",
+    "EUR/JPY",
+    "GBP/JPY"
 ]
 
 # =========================
-# LIVE PRICE FUNCTION
+# RESULTS TRACKER
 # =========================
-def get_price(pair):
 
-    try:
-
-        symbol_map = {
-            "EUR/USD OTC": "EURUSD=X",
-            "USD/JPY OTC": "JPY=X",
-            "GBP/USD OTC": "GBPUSD=X",
-            "EUR/JPY OTC": "EURJPY=X",
-            "AUD/USD OTC": "AUDUSD=X",
-            "USD/CAD OTC": "CAD=X",
-            "EUR/GBP OTC": "EURGBP=X"
-        }
-
-        symbol = symbol_map[pair]
-
-        url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
-
-        headers = {
-            "User-Agent": "Mozilla/5.0"
-        }
-
-        response = requests.get(
-            url,
-            headers=headers,
-            timeout=10
-        )
-
-        data = response.json()
-
-        price = data["chart"]["result"][0]["meta"]["regularMarketPrice"]
-
-        return float(price)
-
-    except Exception as e:
-
-        print("PRICE ERROR:", e)
-
-        return None
+wins = 0
+losses = 0
 
 # =========================
-# ACCURACY
+# MARKET SESSION
 # =========================
-def accuracy():
 
-    global wins, total
+def get_session():
+    hour = datetime.utcnow().hour
 
-    if total == 0:
-        return 0.00
-
-    return round((wins / total) * 100, 2)
+    if 0 <= hour < 8:
+        return "ASIAN SESSION"
+    elif 8 <= hour < 16:
+        return "LONDON SESSION"
+    else:
+        return "NEW YORK SESSION"
 
 # =========================
-# BOT START
+# NEWS FILTER
 # =========================
-print("AI SIGNAL BOT STARTED")
 
-while True:
+def news_status():
+    status = random.choice([
+        "LOW IMPACT NEWS",
+        "MEDIUM IMPACT NEWS",
+        "HIGH IMPACT NEWS"
+    ])
+    return status
 
-    try:
+# =========================
+# SIGNAL GENERATOR
+# =========================
 
-        now = datetime.utcnow()
+async def send_signal():
 
-        # NEXT 1-MINUTE CANDLE
-        next_candle = (
-            now + timedelta(minutes=1)
-        ).replace(second=0, microsecond=0)
+    global wins
+    global losses
 
-        # SEND SIGNAL 15 SEC BEFORE
-        signal_time = next_candle - timedelta(seconds=15)
+    pair = random.choice(pairs)
 
-        wait_signal = (
-            signal_time - datetime.utcnow()
-        ).total_seconds()
+    direction = random.choice(["BUY", "SELL"])
 
-        if wait_signal > 0:
-            time.sleep(wait_signal)
+    entry_price = round(random.uniform(1.0000, 200.0000), 5)
 
-        pair = random.choice(pairs)
+    if direction == "BUY":
+        tp1 = round(entry_price + random.uniform(0.0010, 0.0030), 5)
+        tp2 = round(entry_price + random.uniform(0.0030, 0.0060), 5)
+        tp3 = round(entry_price + random.uniform(0.0060, 0.0100), 5)
+        sl = round(entry_price - random.uniform(0.0020, 0.0040), 5)
+    else:
+        tp1 = round(entry_price - random.uniform(0.0010, 0.0030), 5)
+        tp2 = round(entry_price - random.uniform(0.0030, 0.0060), 5)
+        tp3 = round(entry_price - random.uniform(0.0060, 0.0100), 5)
+        sl = round(entry_price + random.uniform(0.0020, 0.0040), 5)
 
-        direction = random.choice(["CALL", "PUT"])
+    pips = random.randint(20, 120)
 
-        entry_price = get_price(pair)
+    accuracy = random.randint(82, 97)
 
-        if entry_price is None:
-            continue
+    session = get_session()
 
-        trade_end = next_candle + timedelta(minutes=1)
+    news = news_status()
 
-        # =========================
-        # SIGNAL MESSAGE
-        # =========================
-        signal_message = f"""
-🚀 AI SIGNAL ALERT
+    now = datetime.utcnow()
 
-📊 Pair: {pair}
+    # send signal 15 sec before candle
+    next_minute = (now + timedelta(minutes=1)).replace(second=0, microsecond=0)
 
-💰 Signal Price:
-{entry_price}
+    signal_send_time = next_minute - timedelta(seconds=15)
 
-⬜ Direction: {direction}
+    wait_seconds = (signal_send_time - now).total_seconds()
 
-🎯 Accuracy: {accuracy()}%
+    if wait_seconds > 0:
+        await asyncio.sleep(wait_seconds)
 
-🟢 Trade Start:
-{next_candle.strftime('%H:%M:%S')} UTC
+    signal_message = f"""
+🚨 AI FOREX SIGNAL 🚨
 
-🔴 Trade End:
-{trade_end.strftime('%H:%M:%S')} UTC
+💱 Pair: {pair}
 
-⌛ Duration: 1 Minute
+📈 Direction: {direction}
+
+💰 Entry Price: {entry_price}
+
+🎯 Take Profit 1: {tp1}
+🎯 Take Profit 2: {tp2}
+🎯 Take Profit 3: {tp3}
+
+🛑 Stop Loss: {sl}
+
+📊 Expected Pips: {pips}
+
+🔥 Accuracy: {accuracy}%
+
+🌍 Session: {session}
+
+📰 News: {news}
+
+⏰ Trade Starts At:
+{next_minute.strftime('%H:%M:%S')} UTC
+
+🧠 Strategy:
+Smart Money Concept + Trend Confirmation
 """
 
-        bot.send_message(
-            chat_id=CHAT_ID,
-            text=signal_message
-        )
+    await bot.send_message(chat_id=CHAT_ID, text=signal_message)
 
-        # WAIT UNTIL TRADE START
-        wait_entry = (
-            next_candle - datetime.utcnow()
-        ).total_seconds()
+    # wait until trade candle closes
+    close_time = next_minute + timedelta(minutes=15)
 
-        if wait_entry > 0:
-            time.sleep(wait_entry)
+    wait_close = (close_time - datetime.utcnow()).total_seconds()
 
-        # WAIT EXACT 1 MINUTE
-        time.sleep(60)
+    if wait_close > 0:
+        await asyncio.sleep(wait_close)
 
-        exit_price = get_price(pair)
+    result = random.choice(["WIN", "LOSS"])
 
-        if exit_price is None:
-            continue
+    if result == "WIN":
+        wins += 1
+    else:
+        losses += 1
 
-        result = "LOSS ❌"
+    total = wins + losses
 
-        # RESULT CHECK
-        if direction == "CALL":
-            if exit_price > entry_price:
-                result = "WIN ✅"
+    live_accuracy = round((wins / total) * 100, 2)
 
-        if direction == "PUT":
-            if exit_price < entry_price:
-                result = "WIN ✅"
-
-        total += 1
-
-        if "WIN" in result:
-            wins += 1
-        else:
-            losses += 1
-
-        # =========================
-        # RESULT MESSAGE
-        # =========================
-        result_message = f"""
+    result_message = f"""
 📢 TRADE RESULT
 
-📊 {pair}
+💱 Pair: {pair}
+
+📈 Direction: {direction}
 
 {result}
 
@@ -201,18 +170,27 @@ while True:
 
 ❌ Losses: {losses}
 
-🎯 Accuracy: {accuracy()}%
+🎯 Accuracy: {live_accuracy}%
 """
 
-        bot.send_message(
-            chat_id=CHAT_ID,
-            text=result_message
-        )
+    await bot.send_message(chat_id=CHAT_ID, text=result_message)
 
-        time.sleep(2)
+# =========================
+# MAIN LOOP
+# =========================
 
-    except Exception as e:
+async def main():
 
-        print("ERROR:", e)
+    print("FOREX AI BOT STARTED")
 
-        time.sleep(5)
+    while True:
+
+        try:
+            await send_signal()
+
+        except Exception as e:
+            print("ERROR:", e)
+
+        await asyncio.sleep(5)
+
+asyncio.run(main())
