@@ -6,10 +6,8 @@ import re
 # =========================
 # TELEGRAM CONFIG
 # =========================
-# Use your existing variables
-# Example: BOT_TOKEN and CHAT_ID already set in environment or variables
-# BOT_TOKEN = os.environ["BOT_TOKEN"]
-# CHAT_ID = os.environ["CHAT_ID"]
+BOT_TOKEN = "8689634513:AAFm5KBhu2pPnwcwPnTyvS8C1BAUS9YIK7Q"   # <-- manually write your bot token
+CHAT_ID   = "5974354691"     # <-- manually write your chat id
 
 # =========================
 # SETTINGS
@@ -29,10 +27,10 @@ price_history = []
 # =========================
 # SEND TELEGRAM MESSAGE
 # =========================
-def send_telegram_message(message, bot_token=BOT_TOKEN, chat_id=CHAT_ID):
+def send_telegram_message(message):
     try:
-        url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
-        payload = {"chat_id": chat_id, "text": message}
+        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+        payload = {"chat_id": CHAT_ID, "text": message}
         response = requests.post(url, data=payload)
         print("Telegram Response:", response.text)
     except Exception as e:
