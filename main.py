@@ -3,6 +3,7 @@ import os
 import requests
 import pandas as pd
 import ta
+
 from tvDatafeed import TvDatafeed, Interval
 
 # =====================================
@@ -22,7 +23,7 @@ EXCHANGE = "OANDA"
 CHECK_INTERVAL = 60
 
 # =====================================
-# SIGNAL MEMORY
+# MEMORY
 # =====================================
 
 last_signal = None
@@ -67,7 +68,7 @@ def send_telegram(message):
         print("Telegram Error:", e)
 
 # =====================================
-# GET REAL TRADINGVIEW DATA
+# GET LIVE TRADINGVIEW DATA
 # =====================================
 
 def get_data():
@@ -88,6 +89,8 @@ def get_data():
             return None
 
         df.reset_index(inplace=True)
+
+        print("LIVE PRICE:", df.iloc[-1]["close"])
 
         return df
 
@@ -144,7 +147,7 @@ def analyze_market():
 
     latest = df.iloc[-1]
 
-    close = float(latest["close"])
+    close = round(float(latest["close"]), 2)
 
     ema20 = latest["ema20"]
 
@@ -157,12 +160,10 @@ def analyze_market():
     macd_signal = latest["macd_signal"]
 
     # =====================================
-    # SIGNAL LOGIC
+    # BUY CONDITIONS
     # =====================================
 
     buy_score = 0
-
-    sell_score = 0
 
     if ema20 > ema50:
         buy_score += 1
@@ -175,6 +176,12 @@ def analyze_market():
 
     if close > ema20:
         buy_score += 1
+
+    # =====================================
+    # SELL CONDITIONS
+    # =====================================
+
+    sell_score = 0
 
     if ema20 < ema50:
         sell_score += 1
@@ -209,7 +216,7 @@ def analyze_market():
         return
 
     # =====================================
-    # SKIP DUPLICATES
+    # PREVENT DUPLICATES
     # =====================================
 
     if signal == last_signal:
@@ -224,34 +231,26 @@ def analyze_market():
     # ENTRY / TP / SL
     # =====================================
 
-    entry = round(close, 2)
+    entry = close
 
     sl_points = 15
     tp_points = 30
 
     if signal == "BUY":
 
-        tp = round(
-            entry + tp_points,
-            2
-        )
+        tp = round(entry + tp_points, 2)
 
-        sl = round(
-            entry - sl_points,
-            2
-        )
+        sl = round(entry - sl_points, 2)
 
     elif signal == "SELL":
 
-        tp = round(
-            entry - tp_points,
-            2
-        )
+        tp = round(entry - tp_points, 2)
 
-        sl = round(
-            entry + sl_points,
-            2
-        )
+        sl = round(entry + sl_points, 2)
+
+    # =====================================
+    # DEBUG
+    # =====================================
 
     print(
         f"{signal} | Entry={entry} | TP={tp} | SL={sl}"
