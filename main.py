@@ -15,23 +15,26 @@ CHAT_ID = "5974354691"
 # MARKET SETTINGS
 # =========================
 
-SYMBOL = "XAUUSD"
-TIMEFRAME = "1m"
+SYMBOL = "BTCUSDT"
+INTERVAL = "1m"
+LIMIT = 150
 
 # =========================
 # TELEGRAM FUNCTION
 # =========================
 
 def send_telegram(message):
+
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
 
-    data = {
+    payload = {
         "chat_id": CHAT_ID,
         "text": message
     }
 
     try:
-        requests.post(url, data=data)
+        requests.post(url, data=payload)
+
     except Exception as e:
         print("Telegram Error:", e)
 
@@ -41,17 +44,43 @@ def send_telegram(message):
 
 def get_data():
 
-    # Example Binance Gold Proxy
-    url = "https://api.binance.com/api/v3/klines?symbol=XAUUSDT&interval=1m&limit=150"
+    url = (
+        f"https://api.binance.com/api/v3/klines"
+        f"?symbol={SYMBOL}"
+        f"&interval={INTERVAL}"
+        f"&limit={LIMIT}"
+    )
 
-    data = requests.get(url).json()
+    response = requests.get(url)
 
-    df = pd.DataFrame(data)
+    data = response.json()
 
-    df = df.iloc[:, :6]
+    # CHECK API RESPONSE
 
-    df.columns = [
+    if not isinstance(data, list):
+        print("Invalid API response")
+        return None
+
+    # CREATE DATAFRAME
+
+    df = pd.DataFrame(data, columns=[
         "time",
+        "open",
+        "high",
+        "low",
+        "close",
+        "volume",
+        "close_time",
+        "quote_asset_volume",
+        "number_of_trades",
+        "taker_buy_base",
+        "taker_buy_quote",
+        "ignore"
+    ])
+
+    # CONVERT TO NUMBERS
+
+    numeric_columns = [
         "open",
         "high",
         "low",
@@ -59,20 +88,21 @@ def get_data():
         "volume"
     ]
 
-    df["close"] = df["close"].astype(float)
-    df["high"] = df["high"].astype(float)
-    df["low"] = df["low"].astype(float)
-    df["volume"] = df["volume"].astype(float)
+    for col in numeric_columns:
+        df[col] = pd.to_numeric(df[col])
 
     return df
 
 # =========================
-# MAIN STRATEGY
+# ANALYZE MARKET
 # =========================
 
 def analyze_market():
 
     df = get_data()
+
+    if df is None:
+        return
 
     # =========================
     # INDICATORS
@@ -93,7 +123,7 @@ def analyze_market():
         window=14
     ).rsi()
 
-    macd = ta.trend.MACD(df["close"])
+    macd = ta.trend.MACD(close=df["close"])
 
     df["macd"] = macd.macd()
     df["macd_signal"] = macd.macd_signal()
@@ -151,7 +181,7 @@ def analyze_market():
         sell_score += 1
 
     # =========================
-    # SIGNAL GENERATION
+    # FINAL SIGNAL
     # =========================
 
     signal = None
@@ -168,15 +198,19 @@ def analyze_market():
 
     if signal == "BUY":
 
-        entry = close
-        stop_loss = round(entry - 5, 2)
-        take_profit = round(entry + 10, 2)
+        entry = round(close, 2)
+
+        stop_loss = round(entry - 150, 2)
+
+        take_profit = round(entry + 300, 2)
 
     elif signal == "SELL":
 
-        entry = close
-        stop_loss = round(entry + 5, 2)
-        take_profit = round(entry - 10, 2)
+        entry = round(close, 2)
+
+        stop_loss = round(entry + 150, 2)
+
+        take_profit = round(entry - 300, 2)
 
     # =========================
     # SEND SIGNAL
@@ -185,16 +219,18 @@ def analyze_market():
     if signal:
 
         message = f"""
-🔥 AI GOLD SNIPER SIGNAL 🔥
+🔥 AI SNIPER SIGNAL 🔥
 
 📊 Symbol: {SYMBOL}
 📈 Signal: {signal}
 
 🎯 Entry: {entry}
+
 🛑 Stop Loss: {stop_loss}
+
 💰 Take Profit: {take_profit}
 
-📉 RSI: {round(rsi,2)}
+📉 RSI: {round(rsi, 2)}
 
 🕒 Time:
 {datetime.now()}
@@ -205,13 +241,14 @@ def analyze_market():
         send_telegram(message)
 
     else:
+
         print("No strong setup found")
 
 # =========================
-# BOT LOOP
+# MAIN LOOP
 # =========================
 
-print("AI GOLD BOT STARTED")
+print("AI SIGNAL BOT STARTED")
 
 while True:
 
@@ -222,5 +259,7 @@ while True:
     except Exception as e:
 
         print("ERROR:", e)
+
+    # CHECK EVERY 60 SECONDS
 
     time.sleep(60)
