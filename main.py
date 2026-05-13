@@ -22,10 +22,10 @@ last_prices = {}
 def get_price(symbol):
     url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
 
-    r = requests.get(url).json()
+    response = requests.get(url).json()
 
     return float(
-        r["chart"]["result"][0]["meta"]["regularMarketPrice"]
+        response["chart"]["result"][0]["meta"]["regularMarketPrice"]
     )
 
 def get_signal(old_price, new_price):
@@ -35,9 +35,17 @@ def get_signal(old_price, new_price):
         return "PUT 📉"
 
 def get_accuracy(move):
-    return min(98, max(85, int(move * 100000)))
+    value = int(move * 100000)
 
-print("REAL TIME SIGNAL BOT STARTED")
+    if value < 85:
+        return 85
+
+    if value > 98:
+        return 98
+
+    return value
+
+print("AI SIGNAL BOT STARTED")
 
 while True:
 
@@ -45,10 +53,7 @@ while True:
 
         now = datetime.utcnow()
 
-        second = now.second
-
-        # SEND SIGNAL AT XX:XX:50
-        if second == 50:
+        if now.second == 50:
 
             for symbol, pair_name in PAIRS.items():
 
@@ -62,7 +67,6 @@ while True:
 
                 movement = abs(current_price - old_price)
 
-                # FILTER SMALL MOVEMENTS
                 if movement < 0.0004:
                     continue
 
@@ -70,10 +74,10 @@ while True:
 
                 accuracy = get_accuracy(movement)
 
-                entry_time = (now.minute + 1) % 60
-                exit_time = (now.minute + 2) % 60
+                entry_minute = (now.minute + 1) % 60
+                exit_minute = (now.minute + 2) % 60
 
-                signal_message = f"""
+                signal_text = f"""
 🚀 AI SIGNAL ALERT
 
 📊 Pair: {pair_name}
@@ -81,20 +85,23 @@ while True:
 📈 Signal: {signal}
 
 ⏰ Signal Time: {now.hour:02}:{now.minute:02}:50 UTC
-🟢 Entry Time: {now.hour:02}:{entry_time:02}:00 UTC
-🔴 Exit Time: {now.hour:02}:{exit_time:02}:00 UTC
+
+🟢 Entry Time: {now.hour:02}:{entry_minute:02}:00 UTC
+
+🔴 Exit Time: {now.hour:02}:{exit_minute:02}:00 UTC
 
 🎯 Accuracy: {accuracy}%
 """
 
-                bot.send_message(chat_id=CHAT_ID, text=signal_message)
+                bot.send_message(
+                    chat_id=CHAT_ID,
+                    text=signal_text
+                )
 
-                # WAIT UNTIL ENTRY
                 time.sleep(10)
 
                 entry_price = get_price(symbol)
 
-                # WAIT 1 MINUTE TRADE
                 time.sleep(60)
 
                 final_price = get_price(symbol)
@@ -104,7 +111,7 @@ while True:
                 else:
                     result = "WIN ✅" if final_price < entry_price else "LOSS ❌"
 
-                result_message = f"""
+                result_text = f"""
 📢 TRADE RESULT
 
 📊 Pair: {pair_name}
@@ -116,7 +123,10 @@ while True:
 🏁 Final Result: {result}
 """
 
-                bot.send_message(chat_id=CHAT_ID, text=result_message)
+                bot.send_message(
+                    chat_id=CHAT_ID,
+                    text=result_text
+                )
 
                 last_prices[symbol] = final_price
 
