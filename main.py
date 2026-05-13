@@ -1,17 +1,17 @@
-import os
 import time
 import requests
 import pandas as pd
-from ta.trend import EMAIndicator
 from datetime import datetime, timedelta
 from telegram import Bot
 
 # -----------------------
 # TELEGRAM SETTINGS
 # -----------------------
-TOKEN = os.getenv("TELEGRAM_TOKEN")
-CHAT_ID = os.getenv("CHAT_ID")
-bot = Bot(token=TOKEN)
+# Replace these with your actual bot token and chat ID
+BOT_TOKEN = "8689634513:AAFm5KBhu2pPnwcwPnTyvS8C1BAUS9YIK7Q"
+CHAT_ID = "5974354691"
+
+bot = Bot(token=BOT_TOKEN)
 
 # -----------------------
 # OTC PAIRS
@@ -51,7 +51,6 @@ def log_trade(message):
 def fetch_otc_candles(symbol):
     """
     Replace this URL with the real Quotex JSON endpoint for OTC candles.
-    For demonstration, this example uses placeholder API structure.
     """
     try:
         url = f"https://quotex.io/api/candles?symbol={symbol}&interval=1m&limit=50"
@@ -64,16 +63,16 @@ def fetch_otc_candles(symbol):
         return price_history[symbol][-50:] if price_history[symbol] else [100 + 0.1*i for i in range(50)]
 
 # -----------------------
-# GENERATE SIGNAL
+# SIMPLE EMA SIGNAL
 # -----------------------
 def generate_signal(prices):
     df = pd.DataFrame(prices, columns=["close"])
-    df["fast"] = EMAIndicator(df["close"], FAST_EMA).ema_indicator()
-    df["slow"] = EMAIndicator(df["close"], SLOW_EMA).ema_indicator()
+    df['EMA_fast'] = df['close'].ewm(span=FAST_EMA, adjust=False).mean()
+    df['EMA_slow'] = df['close'].ewm(span=SLOW_EMA, adjust=False).mean()
 
-    if df["fast"].iloc[-2] < df["slow"].iloc[-2] and df["fast"].iloc[-1] > df["slow"].iloc[-1]:
+    if df['EMA_fast'].iloc[-2] < df['EMA_slow'].iloc[-2] and df['EMA_fast'].iloc[-1] > df['EMA_slow'].iloc[-1]:
         return "BUY"
-    elif df["fast"].iloc[-2] > df["slow"].iloc[-2] and df["fast"].iloc[-1] < df["slow"].iloc[-1]:
+    elif df['EMA_fast'].iloc[-2] > df['EMA_slow'].iloc[-2] and df['EMA_fast'].iloc[-1] < df['EMA_slow'].iloc[-1]:
         return "SELL"
     return None
 
@@ -98,7 +97,7 @@ while True:
                     candle_open_time = (now + timedelta(seconds=seconds_to_next_candle)).replace(microsecond=0)
                     active_trades[pair_name] = {"signal": signal, "candle_open_time": candle_open_time}
 
-                    entry_price = closes[-1]  # record last price before candle
+                    entry_price = closes[-1]
 
                     message = (
                         f"📊 {pair_name}\n"
