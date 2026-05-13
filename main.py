@@ -1,159 +1,141 @@
-import requests
+import os
 import time
-import traceback
-import re
+import requests
+import pandas as pd
+from ta.trend import EMAIndicator
+from datetime import datetime, timedelta
+from telegram import Bot
 
-# =========================
-# TELEGRAM CONFIG
-# =========================
-BOT_TOKEN = "8689634513:AAFm5KBhu2pPnwcwPnTyvS8C1BAUS9YIK7Q"   # <-- manually write your bot token
-CHAT_ID   = "5974354691"     # <-- manually write your chat id
+# -----------------------
+# TELEGRAM SETTINGS
+# -----------------------
+TOKEN = os.getenv("TELEGRAM_TOKEN")
+CHAT_ID = os.getenv("CHAT_ID")
+bot = Bot(token=TOKEN)
 
-# =========================
-# SETTINGS
-# =========================
-SIGNAL_INTERVAL = 300  # seconds (5 min)
-TP_OFFSET = 5          # USD
-SL_OFFSET = 5          # USD
-MOVING_AVERAGE_PERIOD = 5  # short-term SMA for trend
-PRICE_THRESHOLD = 2        # minimum price change to send new signal
+# -----------------------
+# OTC PAIRS
+# -----------------------
+pairs = {
+    "USD/PKR OTC": "usdpkr-otc",
+    "USD/MXN OTC": "usdmxn-otc",
+    "USD/BRL OTC": "usdbrl-otc"
+}
 
-# =========================
+# -----------------------
+# EMA SETTINGS
+# -----------------------
+FAST_EMA = 5
+SLOW_EMA = 20
+SIGNAL_LEAD_TIME = 20  # seconds before candle
+SLEEP_INTERVAL = 0.5
+
+# -----------------------
 # STORAGE
-# =========================
-last_signal = None
-price_history = []
+# -----------------------
+active_trades = {}  # {"pair_name": {"signal":..., "entry":..., "candle_open_time":...}}
+price_history = {pair: [] for pair in pairs}
 
-# =========================
-# SEND TELEGRAM MESSAGE
-# =========================
-def send_telegram_message(message):
+# -----------------------
+# LOGGING
+# -----------------------
+LOG_FILE = "trade_log.txt"
+def log_trade(message):
+    with open(LOG_FILE, "a") as f:
+        f.write(f"{datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC | {message}\n")
+    print(message)
+
+# -----------------------
+# FETCH QUOTEX OTC CANDLES
+# -----------------------
+def fetch_otc_candles(symbol):
+    """
+    Replace this URL with the real Quotex JSON endpoint for OTC candles.
+    For demonstration, this example uses placeholder API structure.
+    """
     try:
-        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-        payload = {"chat_id": CHAT_ID, "text": message}
-        response = requests.post(url, data=payload)
-        print("Telegram Response:", response.text)
+        url = f"https://quotex.io/api/candles?symbol={symbol}&interval=1m&limit=50"
+        resp = requests.get(url, timeout=5)
+        data = resp.json()
+        closes = [float(c['close']) for c in data]
+        return closes
     except Exception as e:
-        print("Telegram Error:", e)
-        traceback.print_exc()
+        log_trade(f"Error fetching {symbol} candles: {e}")
+        return price_history[symbol][-50:] if price_history[symbol] else [100 + 0.1*i for i in range(50)]
 
-# =========================
-# GET LIVE GOLD PRICE (TradingView)
-# =========================
-def get_gold_price():
-    try:
-        url = "https://www.tradingview.com/symbols/XAUUSD/?exchange=FOREX"
-        headers = {"User-Agent": "Mozilla/5.0"}
-        response = requests.get(url, headers=headers)
-        data = response.text
-        match = re.search(r'"price":([\d.]+),', data)
-        if match:
-            price = float(match.group(1))
-            print("Live Gold Price:", price)
-            return price
-        else:
-            return 3360.0  # fallback
-    except Exception as e:
-        print("Error fetching gold price:", e)
-        return 3360.0
+# -----------------------
+# GENERATE SIGNAL
+# -----------------------
+def generate_signal(prices):
+    df = pd.DataFrame(prices, columns=["close"])
+    df["fast"] = EMAIndicator(df["close"], FAST_EMA).ema_indicator()
+    df["slow"] = EMAIndicator(df["close"], SLOW_EMA).ema_indicator()
 
-# =========================
-# DETERMINE TREND
-# =========================
-def determine_trend():
-    if len(price_history) < MOVING_AVERAGE_PERIOD:
-        return None
-    sma = sum(price_history[-MOVING_AVERAGE_PERIOD:]) / MOVING_AVERAGE_PERIOD
-    current_price = price_history[-1]
-    if current_price > sma:
+    if df["fast"].iloc[-2] < df["slow"].iloc[-2] and df["fast"].iloc[-1] > df["slow"].iloc[-1]:
         return "BUY"
-    elif current_price < sma:
+    elif df["fast"].iloc[-2] > df["slow"].iloc[-2] and df["fast"].iloc[-1] < df["slow"].iloc[-1]:
         return "SELL"
     return None
 
-# =========================
-# GENERATE SIGNAL
-# =========================
-def generate_signal():
-    global last_signal
-
-    price = get_gold_price()
-    price_history.append(price)
-
-    signal = determine_trend()
-    if signal is None:
-        print("Trend unclear, no signal.")
-        return None
-
-    entry = round(price, 2)
-    tp = round(entry + TP_OFFSET, 2) if signal == "BUY" else round(entry - TP_OFFSET, 2)
-    sl = round(entry - SL_OFFSET, 2) if signal == "BUY" else round(entry + SL_OFFSET, 2)
-
-    current_signal = (signal, entry, tp, sl)
-
-    # Prevent redundant signals
-    if last_signal:
-        last_signal_signal, last_entry, _, _ = last_signal
-        if signal == last_signal_signal and abs(entry - last_entry) < PRICE_THRESHOLD:
-            print("Signal too similar to last, skipping...")
-            return last_signal
-
-    # Send new signal
-    message = f"""
-🔥 AI GOLD SIGNAL
-
-📈 {signal} XAUUSD
-
-💰 Entry : {entry}
-🎯 TP     : {tp}
-🛑 SL     : {sl}
-"""
-    send_telegram_message(message)
-    last_signal = current_signal
-    return current_signal
-
-# =========================
-# CHECK TP / SL HIT
-# =========================
-def check_tp_sl_hit(signal_info):
-    if signal_info is None:
-        return False
-    signal, entry, tp, sl = signal_info
-    price = get_gold_price()
-
-    if signal == "BUY":
-        if price >= tp:
-            send_telegram_message(f"✅ BUY TP HIT at {price}")
-            return True
-        elif price <= sl:
-            send_telegram_message(f"❌ BUY SL HIT at {price}")
-            return True
-    elif signal == "SELL":
-        if price <= tp:
-            send_telegram_message(f"✅ SELL TP HIT at {price}")
-            return True
-        elif price >= sl:
-            send_telegram_message(f"❌ SELL SL HIT at {price}")
-            return True
-    return False
-
-# =========================
+# -----------------------
 # MAIN LOOP
-# =========================
-print("AI GOLD SIGNAL BOT STARTED")
-
-current_signal_info = None
+# -----------------------
+print("🚀 OTC Sniper Bot Started")
 
 while True:
-    try:
-        print("Checking market and generating signal...")
-        current_signal_info = generate_signal() or current_signal_info
-        if current_signal_info:
-            hit = check_tp_sl_hit(current_signal_info)
-            if hit:
-                current_signal_info = None  # reset after TP/SL
-    except Exception as e:
-        print("MAIN LOOP ERROR:", e)
-        traceback.print_exc()
+    now = datetime.utcnow()
+    seconds_to_next_candle = 60 - now.second
 
-    time.sleep(SIGNAL_INTERVAL)
+    # ---- SEND SIGNAL 20 SECONDS BEFORE NEW CANDLE ----
+    if seconds_to_next_candle <= SIGNAL_LEAD_TIME:
+        for pair_name, symbol in pairs.items():
+            closes = fetch_otc_candles(symbol)
+            price_history[pair_name] = closes[-50:]
+
+            if pair_name not in active_trades:
+                signal = generate_signal(price_history[pair_name])
+                if signal:
+                    candle_open_time = (now + timedelta(seconds=seconds_to_next_candle)).replace(microsecond=0)
+                    active_trades[pair_name] = {"signal": signal, "candle_open_time": candle_open_time}
+
+                    entry_price = closes[-1]  # record last price before candle
+
+                    message = (
+                        f"📊 {pair_name}\n"
+                        f"Signal: {signal}\n"
+                        f"Candle Opens: {candle_open_time.strftime('%H:%M:%S')} UTC\n"
+                        f"Entry Price (estimated): {entry_price:.4f}"
+                    )
+                    bot.send_message(chat_id=CHAT_ID, text=message)
+                    log_trade(message)
+
+    # ---- RECORD ENTRY & CHECK RESULT ----
+    for pair_name in list(active_trades.keys()):
+        trade = active_trades[pair_name]
+
+        # RECORD EXACT CANDLE OPEN PRICE
+        if "entry" not in trade and now >= trade["candle_open_time"]:
+            trade["entry"] = fetch_otc_candles(pairs[pair_name])[-1]
+            log_trade(f"{pair_name} Entry Price: {trade['entry']:.4f}")
+
+        # CALCULATE RESULT AFTER 1 MINUTE
+        elif "entry" in trade and now >= trade["candle_open_time"] + timedelta(seconds=60):
+            close_price = fetch_otc_candles(pairs[pair_name])[-1]
+            win = (trade["signal"] == "BUY" and close_price > trade["entry"]) or \
+                  (trade["signal"] == "SELL" and close_price < trade["entry"])
+            result = "WIN ✅" if win else "LOSS ❌"
+
+            message = (
+                f"📈 {pair_name} Trade Result\n"
+                f"Signal: {trade['signal']}\n"
+                f"Entry: {trade['entry']:.4f}\n"
+                f"Close: {close_price:.4f}\n"
+                f"Result: {result}\n"
+                f"Time: {now.strftime('%H:%M:%S')} UTC"
+            )
+            bot.send_message(chat_id=CHAT_ID, text=message)
+            log_trade(message)
+
+            del active_trades[pair_name]
+
+    time.sleep(SLEEP_INTERVAL)
