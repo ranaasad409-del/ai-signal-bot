@@ -1,9 +1,9 @@
+import json
 import time
-import requests
-import pandas as pd
+import asyncio
+import websockets
 from datetime import datetime, timedelta
 from telegram import Bot
-import random
 
 # =======================
 # TELEGRAM SETTINGS
@@ -13,130 +13,118 @@ CHAT_ID = "5974354691"
 bot = Bot(token=BOT_TOKEN)
 
 # =======================
-# OTC PAIRS
+# QUOTEX LOGIN SETTINGS
 # =======================
-pairs = {
-    "USD/PKR OTC": "USDPKR",
-    "USD/MXN OTC": "USDMXN",
-    "USD/BRL OTC": "USDBRL"
-}
+QUOTEX_EMAIL = "supportquotex97@gmail.com"
+QUOTEX_PASSWORD = "Allahbadsha409@"
 
 # =======================
-# EMA SETTINGS
+# OTC PAIRS TO TRACK
 # =======================
+pairs = ["USDPKR", "USDMXN", "USDBRL"]
+
+# EMA Settings for signal
 FAST_EMA = 5
 SLOW_EMA = 20
-SIGNAL_LEAD_TIME = 20
+SIGNAL_LEAD_TIME = 20  # seconds before candle
 SLEEP_INTERVAL = 0.5
 
-# =======================
-# STORAGE
-# =======================
+# Storage
 active_trades = {}
 price_history = {pair: [] for pair in pairs}
 
-# =======================
-# LOGGING
-# =======================
-LOG_FILE = "trade_log.txt"
+# Logging
 def log_trade(message):
-    with open(LOG_FILE, "a") as f:
+    print(f"{datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC | {message}")
+    with open("trade_log.txt", "a") as f:
         f.write(f"{datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC | {message}\n")
-    print(message)
 
-# =======================
-# FETCH QUOTEX OTC CANDLES
-# =======================
-def fetch_otc_candles(symbol):
-    try:
-        url = f"https://quotex.io/api/candles?symbol={symbol}&interval=1m&limit=50"
-        resp = requests.get(url, timeout=5)
-        data = resp.json()
-        closes = [float(c['close']) for c in data]
-        return closes
-    except Exception as e:
-        log_trade(f"Error fetching {symbol}: {e}")
-        # fallback to last price or dummy
-        if symbol in price_history and price_history[symbol]:
-            last = price_history[symbol][-1]
-            return [last + random.uniform(-0.1, 0.1) for _ in range(50)]
+# EMA calculation
+def calculate_ema(prices, span):
+    ema = []
+    for i, price in enumerate(prices):
+        if i == 0:
+            ema.append(price)
         else:
-            return [100 + 0.1*i for i in range(50)]
+            ema.append((price * (2 / (span + 1))) + (ema[-1] * (1 - 2 / (span + 1))))
+    return ema
 
-# =======================
-# GENERATE SIGNAL USING EMA
-# =======================
 def generate_signal(prices):
-    df = pd.DataFrame(prices, columns=["close"])
-    df['EMA_fast'] = df['close'].ewm(span=FAST_EMA, adjust=False).mean()
-    df['EMA_slow'] = df['close'].ewm(span=SLOW_EMA, adjust=False).mean()
-
-    if df['EMA_fast'].iloc[-2] < df['EMA_slow'].iloc[-2] and df['EMA_fast'].iloc[-1] > df['EMA_slow'].iloc[-1]:
+    ema_fast = calculate_ema(prices, FAST_EMA)
+    ema_slow = calculate_ema(prices, SLOW_EMA)
+    if ema_fast[-2] < ema_slow[-2] and ema_fast[-1] > ema_slow[-1]:
         return "BUY"
-    elif df['EMA_fast'].iloc[-2] > df['EMA_slow'].iloc[-2] and df['EMA_fast'].iloc[-1] < df['EMA_slow'].iloc[-1]:
+    elif ema_fast[-2] > ema_slow[-2] and ema_fast[-1] < ema_slow[-1]:
         return "SELL"
     return None
 
 # =======================
-# MAIN LOOP
+# WebSocket handler
 # =======================
-print("🚀 OTC Sniper Bot Started")
+async def quotex_sniper():
+    uri = "wss://quotex.io/ws"  # placeholder, actual WS URL may vary
+    async with websockets.connect(uri) as websocket:
+        # Login payload (simplified)
+        login_payload = json.dumps({
+            "type": "auth",
+            "email": QUOTEX_EMAIL,
+            "password": QUOTEX_PASSWORD
+        })
+        await websocket.send(login_payload)
 
-while True:
-    now = datetime.utcnow()
-    seconds_to_next_candle = 60 - now.second
+        log_trade("🚀 Connected to Quotex WebSocket")
 
-    # ---- SEND SIGNAL 20 SECONDS BEFORE CANDLE ----
-    if seconds_to_next_candle <= SIGNAL_LEAD_TIME:
-        for pair_name, symbol in pairs.items():
-            closes = fetch_otc_candles(symbol)
-            price_history[pair_name] = closes[-50:]
+        while True:
+            try:
+                message = await websocket.recv()
+                data = json.loads(message)
 
-            if pair_name not in active_trades:
-                signal = generate_signal(price_history[pair_name])
-                if signal:
-                    candle_open_time = (now + timedelta(seconds=seconds_to_next_candle)).replace(microsecond=0)
-                    entry_price = closes[-1]
+                # Example structure for a candle
+                # You will need to adjust based on actual WS feed
+                for pair in pairs:
+                    candle = data.get(pair)
+                    if not candle:
+                        continue
 
-                    active_trades[pair_name] = {
-                        "signal": signal,
-                        "candle_open_time": candle_open_time,
-                        "entry": entry_price
-                    }
+                    close_price = float(candle['close'])
+                    price_history[pair].append(close_price)
+                    if len(price_history[pair]) > 50:
+                        price_history[pair] = price_history[pair][-50:]
 
-                    message = (
-                        f"📊 {pair_name}\n"
-                        f"Signal: {signal}\n"
-                        f"Candle Opens: {candle_open_time.strftime('%H:%M:%S')} UTC\n"
-                        f"Entry Price (estimated): {entry_price:.4f}"
-                    )
-                    bot.send_message(chat_id=CHAT_ID, text=message)
-                    log_trade(message)
+                    now = datetime.utcnow()
+                    seconds_to_next_candle = 60 - now.second
 
-    # ---- RECORD ENTRY & CHECK RESULT ----
-    for pair_name in list(active_trades.keys()):
-        trade = active_trades[pair_name]
+                    # Send sniper signal
+                    if seconds_to_next_candle <= SIGNAL_LEAD_TIME:
+                        if pair not in active_trades:
+                            signal = generate_signal(price_history[pair])
+                            if signal:
+                                candle_open_time = (now + timedelta(seconds=seconds_to_next_candle)).replace(microsecond=0)
+                                entry_price = close_price
+                                active_trades[pair] = {"signal": signal, "candle_open_time": candle_open_time, "entry": entry_price}
 
-        # RECORD CANDLE OPEN PRICE (already stored in entry)
-        if now >= trade["candle_open_time"] + timedelta(seconds=60):
-            closes = fetch_otc_candles(pairs[pair_name])
-            close_price = closes[-1]
+                                msg = f"📊 {pair} OTC Signal\nSignal: {signal}\nCandle Opens: {candle_open_time.strftime('%H:%M:%S')} UTC\nEntry Price: {entry_price:.4f}"
+                                bot.send_message(chat_id=CHAT_ID, text=msg)
+                                log_trade(msg)
 
-            win = (trade["signal"] == "BUY" and close_price > trade["entry"]) or \
-                  (trade["signal"] == "SELL" and close_price < trade["entry"])
-            result = "WIN ✅" if win else "LOSS ❌"
+                    # Check candle close result
+                    if pair in active_trades:
+                        trade = active_trades[pair]
+                        if now >= trade["candle_open_time"] + timedelta(seconds=60):
+                            close = close_price
+                            win = (trade["signal"]=="BUY" and close > trade["entry"]) or (trade["signal"]=="SELL" and close < trade["entry"])
+                            result = "WIN ✅" if win else "LOSS ❌"
+                            msg = f"📈 {pair} Trade Result\nSignal: {trade['signal']}\nEntry: {trade['entry']:.4f}\nClose: {close:.4f}\nResult: {result}\nTime: {now.strftime('%H:%M:%S')} UTC"
+                            bot.send_message(chat_id=CHAT_ID, text=msg)
+                            log_trade(msg)
+                            del active_trades[pair]
 
-            message = (
-                f"📈 {pair_name} Trade Result\n"
-                f"Signal: {trade['signal']}\n"
-                f"Entry: {trade['entry']:.4f}\n"
-                f"Close: {close_price:.4f}\n"
-                f"Result: {result}\n"
-                f"Time: {now.strftime('%H:%M:%S')} UTC"
-            )
-            bot.send_message(chat_id=CHAT_ID, text=message)
-            log_trade(message)
+            except Exception as e:
+                log_trade(f"Error processing WebSocket message: {e}")
+                await asyncio.sleep(1)
 
-            del active_trades[pair_name]
-
-    time.sleep(SLEEP_INTERVAL)
+# =======================
+# Run the bot
+# =======================
+log_trade("🚀 OTC Sniper Bot Started")
+asyncio.get_event_loop().run_until_complete(quotex_sniper())
