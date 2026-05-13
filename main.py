@@ -2,6 +2,7 @@ import time
 import requests
 import pandas as pd
 import ta
+import yfinance as yf
 from datetime import datetime
 
 # =========================
@@ -12,12 +13,12 @@ BOT_TOKEN = "8689634513:AAFm5KBhu2pPnwcwPnTyvS8C1BAUS9YIK7Q"
 CHAT_ID = "5974354691"
 
 # =========================
-# MARKET SETTINGS
+# GOLD MARKET SETTINGS
 # =========================
 
-SYMBOL = "BTCUSDT"
-INTERVAL = "1m"
-LIMIT = 150
+SYMBOL = "GC=F"   # GOLD FUTURES
+
+CHECK_INTERVAL = 60  # seconds
 
 # =========================
 # TELEGRAM FUNCTION
@@ -33,9 +34,11 @@ def send_telegram(message):
     }
 
     try:
+
         requests.post(url, data=payload)
 
     except Exception as e:
+
         print("Telegram Error:", e)
 
 # =========================
@@ -44,54 +47,68 @@ def send_telegram(message):
 
 def get_data():
 
-    url = (
-        f"https://api.binance.com/api/v3/klines"
-        f"?symbol={SYMBOL}"
-        f"&interval={INTERVAL}"
-        f"&limit={LIMIT}"
-    )
+    try:
 
-    response = requests.get(url)
+        df = yf.download(
+            tickers=SYMBOL,
+            interval="1m",
+            period="1d",
+            progress=False
+        )
 
-    data = response.json()
+        if df.empty:
 
-    # CHECK API RESPONSE
+            print("No market data found")
 
-    if not isinstance(data, list):
-        print("Invalid API response")
+            return None
+
+        # RESET INDEX
+
+        df.reset_index(inplace=True)
+
+        # LOWERCASE COLUMNS
+
+        df.columns = [str(col).lower() for col in df.columns]
+
+        # KEEP REQUIRED COLUMNS
+
+        df = df[[
+            "datetime",
+            "open",
+            "high",
+            "low",
+            "close",
+            "volume"
+        ]]
+
+        # CONVERT TO FLOAT
+
+        numeric_cols = [
+            "open",
+            "high",
+            "low",
+            "close",
+            "volume"
+        ]
+
+        for col in numeric_cols:
+
+            df[col] = pd.to_numeric(
+                df[col],
+                errors="coerce"
+            )
+
+        # REMOVE EMPTY VALUES
+
+        df.dropna(inplace=True)
+
+        return df
+
+    except Exception as e:
+
+        print("DATA ERROR:", e)
+
         return None
-
-    # CREATE DATAFRAME
-
-    df = pd.DataFrame(data, columns=[
-        "time",
-        "open",
-        "high",
-        "low",
-        "close",
-        "volume",
-        "close_time",
-        "quote_asset_volume",
-        "number_of_trades",
-        "taker_buy_base",
-        "taker_buy_quote",
-        "ignore"
-    ])
-
-    # CONVERT TO NUMBERS
-
-    numeric_columns = [
-        "open",
-        "high",
-        "low",
-        "close",
-        "volume"
-    ]
-
-    for col in numeric_columns:
-        df[col] = pd.to_numeric(df[col])
-
-    return df
 
 # =========================
 # ANALYZE MARKET
@@ -102,6 +119,7 @@ def analyze_market():
     df = get_data()
 
     if df is None:
+
         return
 
     # =========================
@@ -123,9 +141,12 @@ def analyze_market():
         window=14
     ).rsi()
 
-    macd = ta.trend.MACD(close=df["close"])
+    macd = ta.trend.MACD(
+        close=df["close"]
+    )
 
     df["macd"] = macd.macd()
+
     df["macd_signal"] = macd.macd_signal()
 
     # =========================
@@ -137,11 +158,13 @@ def analyze_market():
     close = latest["close"]
 
     ema20 = latest["ema20"]
+
     ema50 = latest["ema50"]
 
     rsi = latest["rsi"]
 
     macd_value = latest["macd"]
+
     macd_signal = latest["macd_signal"]
 
     # =========================
@@ -153,7 +176,7 @@ def analyze_market():
     if ema20 > ema50:
         buy_score += 1
 
-    if rsi > 50:
+    if rsi > 55:
         buy_score += 1
 
     if macd_value > macd_signal:
@@ -171,7 +194,7 @@ def analyze_market():
     if ema20 < ema50:
         sell_score += 1
 
-    if rsi < 50:
+    if rsi < 45:
         sell_score += 1
 
     if macd_value < macd_signal:
@@ -186,31 +209,33 @@ def analyze_market():
 
     signal = None
 
-    if buy_score >= 3:
+    if buy_score >= 4:
+
         signal = "BUY"
 
-    elif sell_score >= 3:
+    elif sell_score >= 4:
+
         signal = "SELL"
 
     # =========================
-    # TP & SL
+    # TP / SL
     # =========================
 
     if signal == "BUY":
 
         entry = round(close, 2)
 
-        stop_loss = round(entry - 150, 2)
+        stop_loss = round(entry - 5, 2)
 
-        take_profit = round(entry + 300, 2)
+        take_profit = round(entry + 10, 2)
 
     elif signal == "SELL":
 
         entry = round(close, 2)
 
-        stop_loss = round(entry + 150, 2)
+        stop_loss = round(entry + 5, 2)
 
-        take_profit = round(entry - 300, 2)
+        take_profit = round(entry - 10, 2)
 
     # =========================
     # SEND SIGNAL
@@ -219,9 +244,10 @@ def analyze_market():
     if signal:
 
         message = f"""
-🔥 AI SNIPER SIGNAL 🔥
+🔥 AI GOLD SNIPER SIGNAL 🔥
 
-📊 Symbol: {SYMBOL}
+📊 Symbol: GOLD (GC=F)
+
 📈 Signal: {signal}
 
 🎯 Entry: {entry}
@@ -245,10 +271,14 @@ def analyze_market():
         print("No strong setup found")
 
 # =========================
-# MAIN LOOP
+# START BOT
 # =========================
 
-print("AI SIGNAL BOT STARTED")
+print("AI GOLD BOT STARTED")
+
+# =========================
+# MAIN LOOP
+# =========================
 
 while True:
 
@@ -260,6 +290,4 @@ while True:
 
         print("ERROR:", e)
 
-    # CHECK EVERY 60 SECONDS
-
-    time.sleep(60)
+    time.sleep(CHECK_INTERVAL)
