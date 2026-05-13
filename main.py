@@ -10,20 +10,32 @@ CHAT_ID = os.getenv("CHAT_ID")
 bot = Bot(token=TOKEN)
 
 PAIRS = {
+
+    # FOREX
     "EURUSD=X": "EUR/USD",
     "GBPUSD=X": "GBP/USD",
     "USDJPY=X": "USD/JPY",
     "GBPJPY=X": "GBP/JPY",
-    "AUDUSD=X": "AUD/USD"
+    "AUDUSD=X": "AUD/USD",
+
+    # OTC STYLE
+    "EURUSD-OTC": "EUR/USD OTC",
+    "GBPUSD-OTC": "GBP/USD OTC",
+    "USDJPY-OTC": "USD/JPY OTC",
+    "GBPJPY-OTC": "GBP/JPY OTC",
+    "AUDUSD-OTC": "AUD/USD OTC"
 }
 
-last_prices = {}
+price_history = {}
 
 def get_price(symbol):
 
     try:
 
-        url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
+        # OTC fallback using real forex pair
+        real_symbol = symbol.replace("-OTC", "=X")
+
+        url = f"https://query1.finance.yahoo.com/v8/finance/chart/{real_symbol}"
 
         headers = {
             "User-Agent": "Mozilla/5.0"
@@ -48,28 +60,40 @@ def get_price(symbol):
         return None
 
 
-def get_signal(old_price, new_price):
+def calculate_signal(prices):
 
-    if new_price > old_price:
+    if len(prices) < 3:
+        return None
+
+    p1 = prices[-3]
+    p2 = prices[-2]
+    p3 = prices[-1]
+
+    # STRONG UP TREND
+    if p1 < p2 < p3:
         return "CALL 📈"
 
-    return "PUT 📉"
+    # STRONG DOWN TREND
+    if p1 > p2 > p3:
+        return "PUT 📉"
+
+    return None
 
 
-def get_accuracy(move):
+def calculate_accuracy(prices):
 
-    value = int(move * 100000)
+    move = abs(prices[-1] - prices[-2])
 
-    if value < 85:
-        return 85
+    accuracy = 85 + int(move * 100000)
 
-    if value > 98:
-        return 98
+    if accuracy > 98:
+        accuracy = 98
 
-    return value
+    return accuracy
 
 
 print("AI SIGNAL BOT STARTED")
+
 
 while True:
 
@@ -77,7 +101,7 @@ while True:
 
         now = datetime.utcnow()
 
-        # SEND SIGNAL EXACTLY AT :50 SECOND
+        # SEND SIGNAL AT EXACT XX:XX:50
         if now.second == 50:
 
             for symbol, pair_name in PAIRS.items():
@@ -87,21 +111,27 @@ while True:
                 if current_price is None:
                     continue
 
-                if symbol not in last_prices:
-                    last_prices[symbol] = current_price
+                if symbol not in price_history:
+                    price_history[symbol] = []
+
+                price_history[symbol].append(current_price)
+
+                # KEEP LAST 5 PRICES
+                if len(price_history[symbol]) > 5:
+                    price_history[symbol].pop(0)
+
+                prices = price_history[symbol]
+
+                signal = calculate_signal(prices)
+
+                if signal is None:
                     continue
 
-                old_price = last_prices[symbol]
+                accuracy = calculate_accuracy(prices)
 
-                movement = abs(current_price - old_price)
-
-                # FILTER SMALL MOVES
-                if movement < 0.0004:
+                # FILTER LOW QUALITY SIGNALS
+                if accuracy < 88:
                     continue
-
-                signal = get_signal(old_price, current_price)
-
-                accuracy = get_accuracy(movement)
 
                 entry_minute = (now.minute + 1) % 60
                 exit_minute = (now.minute + 2) % 60
@@ -111,17 +141,24 @@ while True:
 
 📊 Pair: {pair_name}
 
-📈 Signal: {signal}
+💰 Current Price: {current_price}
 
-⏰ Signal Time: {now.hour:02}:{now.minute:02}:50 UTC
-
-🟢 Entry Time: {now.hour:02}:{entry_minute:02}:00 UTC
-
-🔴 Exit Time: {now.hour:02}:{exit_minute:02}:00 UTC
+📈 Direction: {signal}
 
 🎯 Accuracy: {accuracy}%
 
-⚡ Duration: 1 Minute Trade
+⏰ Signal Time:
+{now.hour:02}:{now.minute:02}:50 UTC
+
+🟢 Entry Time:
+{now.hour:02}:{entry_minute:02}:00 UTC
+
+🔴 Exit Time:
+{now.hour:02}:{exit_minute:02}:00 UTC
+
+⚡ Duration: 1 Minute
+
+🔥 Strong Trend Confirmed
 """
 
                 bot.send_message(
@@ -131,7 +168,7 @@ while True:
 
                 print(f"SIGNAL SENT -> {pair_name} {signal}")
 
-                # WAIT UNTIL ENTRY
+                # WAIT 10 SECONDS UNTIL ENTRY
                 time.sleep(10)
 
                 entry_price = get_price(symbol)
@@ -139,7 +176,7 @@ while True:
                 if entry_price is None:
                     continue
 
-                # WAIT 1 MINUTE
+                # WAIT 1 MINUTE TRADE
                 time.sleep(60)
 
                 final_price = get_price(symbol)
@@ -158,11 +195,15 @@ while True:
 
 📊 Pair: {pair_name}
 
-📈 Signal: {signal}
+💰 Entry Price: {entry_price}
+
+💰 Exit Price: {final_price}
+
+📈 Direction: {signal}
 
 🎯 Accuracy: {accuracy}%
 
-🏁 Final Result: {result}
+🏁 Result: {result}
 """
 
                 bot.send_message(
@@ -171,8 +212,6 @@ while True:
                 )
 
                 print(f"RESULT -> {pair_name} {result}")
-
-                last_prices[symbol] = final_price
 
             time.sleep(2)
 
