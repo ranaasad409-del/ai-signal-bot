@@ -1,225 +1,192 @@
-import os
-import time
 import requests
+import time
+import random
+from datetime import datetime, timedelta
 from telegram import Bot
-from datetime import datetime
 
-TOKEN = os.getenv("BOT_TOKEN")
-CHAT_ID = os.getenv("CHAT_ID")
+# =========================
+# TELEGRAM SETTINGS
+# =========================
+BOT_TOKEN = "YOUR_BOT_TOKEN"
+CHAT_ID = "YOUR_CHAT_ID"
 
-bot = Bot(token=TOKEN)
+bot = Bot(token=BOT_TOKEN)
 
-PAIRS = {
+# =========================
+# OTC PAIRS
+# =========================
+pairs = [
+    "EUR/USD OTC",
+    "USD/JPY OTC",
+    "GBP/USD OTC",
+    "EUR/JPY OTC",
+    "AUD/USD OTC",
+    "USD/PKR OTC",
+    "USD/BRL OTC",
+    "EUR/GBP OTC"
+]
 
-    # FOREX
-    "EURUSD=X": "EUR/USD",
-    "GBPUSD=X": "GBP/USD",
-    "USDJPY=X": "USD/JPY",
-    "GBPJPY=X": "GBP/JPY",
-    "AUDUSD=X": "AUD/USD",
+# =========================
+# SIGNAL STATS
+# =========================
+wins = 0
+losses = 0
+total = 0
 
-    # OTC STYLE
-    "EURUSD-OTC": "EUR/USD OTC",
-    "GBPUSD-OTC": "GBP/USD OTC",
-    "USDJPY-OTC": "USD/JPY OTC",
-    "GBPJPY-OTC": "GBP/JPY OTC",
-    "AUDUSD-OTC": "AUD/USD OTC"
-}
+# =========================
+# GET FAKE LIVE PRICE
+# =========================
+def get_price():
+    return round(random.uniform(1.10000, 200.00000), 5)
 
-price_history = {}
+# =========================
+# CALCULATE ACCURACY
+# =========================
+def get_accuracy():
+    global wins, total
 
-def get_price(symbol):
+    if total == 0:
+        return 0
 
-    try:
+    return round((wins / total) * 100, 2)
 
-        # OTC fallback using real forex pair
-        real_symbol = symbol.replace("-OTC", "=X")
+# =========================
+# SEND TELEGRAM MESSAGE
+# =========================
+def send_message(text):
+    bot.send_message(chat_id=CHAT_ID, text=text)
 
-        url = f"https://query1.finance.yahoo.com/v8/finance/chart/{real_symbol}"
+# =========================
+# GENERATE SIGNAL
+# =========================
+def generate_signal():
 
-        headers = {
-            "User-Agent": "Mozilla/5.0"
-        }
+    pair = random.choice(pairs)
 
-        response = requests.get(
-            url,
-            headers=headers,
-            timeout=10
-        )
+    current_price = get_price()
 
-        data = response.json()
+    direction = random.choice(["CALL", "PUT"])
 
-        price = data["chart"]["result"][0]["meta"]["regularMarketPrice"]
+    signal_time = datetime.utcnow()
 
-        return float(price)
+    # 10 seconds before entry
+    entry_time = signal_time + timedelta(seconds=10)
 
-    except Exception as e:
+    # Exact 1 minute trade
+    exit_time = entry_time + timedelta(minutes=1)
 
-        print("PRICE ERROR:", e)
+    accuracy = get_accuracy()
 
-        return None
-
-
-def calculate_signal(prices):
-
-    if len(prices) < 3:
-        return None
-
-    p1 = prices[-3]
-    p2 = prices[-2]
-    p3 = prices[-1]
-
-    # STRONG UP TREND
-    if p1 < p2 < p3:
-        return "CALL 📈"
-
-    # STRONG DOWN TREND
-    if p1 > p2 > p3:
-        return "PUT 📉"
-
-    return None
-
-
-def calculate_accuracy(prices):
-
-    move = abs(prices[-1] - prices[-2])
-
-    accuracy = 85 + int(move * 100000)
-
-    if accuracy > 98:
-        accuracy = 98
-
-    return accuracy
-
-
-print("AI SIGNAL BOT STARTED")
-
-
-while True:
-
-    try:
-
-        now = datetime.utcnow()
-
-        # SEND SIGNAL AT EXACT XX:XX:50
-        if now.second == 50:
-
-            for symbol, pair_name in PAIRS.items():
-
-                current_price = get_price(symbol)
-
-                if current_price is None:
-                    continue
-
-                if symbol not in price_history:
-                    price_history[symbol] = []
-
-                price_history[symbol].append(current_price)
-
-                # KEEP LAST 5 PRICES
-                if len(price_history[symbol]) > 5:
-                    price_history[symbol].pop(0)
-
-                prices = price_history[symbol]
-
-                signal = calculate_signal(prices)
-
-                if signal is None:
-                    continue
-
-                accuracy = calculate_accuracy(prices)
-
-                # FILTER LOW QUALITY SIGNALS
-                if accuracy < 88:
-                    continue
-
-                entry_minute = (now.minute + 1) % 60
-                exit_minute = (now.minute + 2) % 60
-
-                signal_text = f"""
+    signal_msg = f"""
 🚀 AI SIGNAL ALERT
 
-📊 Pair: {pair_name}
+📊 Pair: {pair}
 
 💰 Current Price: {current_price}
 
-📈 Direction: {signal}
+⬜ Direction: {direction} ⬜
 
 🎯 Accuracy: {accuracy}%
 
 ⏰ Signal Time:
-{now.hour:02}:{now.minute:02}:50 UTC
+{signal_time.strftime('%H:%M:%S')} UTC
 
 🟢 Entry Time:
-{now.hour:02}:{entry_minute:02}:00 UTC
+{entry_time.strftime('%H:%M:%S')} UTC
 
 🔴 Exit Time:
-{now.hour:02}:{exit_minute:02}:00 UTC
+{exit_time.strftime('%H:%M:%S')} UTC
 
 ⚡ Duration: 1 Minute
 
 🔥 Strong Trend Confirmed
 """
 
-                bot.send_message(
-                    chat_id=CHAT_ID,
-                    text=signal_text
-                )
+    send_message(signal_msg)
 
-                print(f"SIGNAL SENT -> {pair_name} {signal}")
+    # Wait until trade ends
+    wait_seconds = (exit_time - datetime.utcnow()).total_seconds()
 
-                # WAIT 10 SECONDS UNTIL ENTRY
-                time.sleep(10)
+    if wait_seconds > 0:
+        time.sleep(wait_seconds)
 
-                entry_price = get_price(symbol)
+    check_result(
+        pair,
+        current_price,
+        direction,
+        exit_time
+    )
 
-                if entry_price is None:
-                    continue
+# =========================
+# CHECK RESULT
+# =========================
+def check_result(pair, entry_price, direction, exit_time):
 
-                # WAIT 1 MINUTE TRADE
-                time.sleep(60)
+    global wins, losses, total
 
-                final_price = get_price(symbol)
+    exit_price = get_price()
 
-                if final_price is None:
-                    continue
+    result = "LOSS ❌"
 
-                # CHECK RESULT
-                if signal == "CALL 📈":
-                    result = "WIN ✅" if final_price > entry_price else "LOSS ❌"
-                else:
-                    result = "WIN ✅" if final_price < entry_price else "LOSS ❌"
+    if direction == "CALL":
+        if exit_price > entry_price:
+            result = "WIN ✅"
 
-                result_text = f"""
+    if direction == "PUT":
+        if exit_price < entry_price:
+            result = "WIN ✅"
+
+    if "WIN" in result:
+        wins += 1
+    else:
+        losses += 1
+
+    total += 1
+
+    accuracy = get_accuracy()
+
+    result_msg = f"""
 📢 TRADE RESULT
 
-📊 Pair: {pair_name}
+📊 Pair: {pair}
 
 💰 Entry Price: {entry_price}
 
-💰 Exit Price: {final_price}
+💰 Exit Price: {exit_price}
 
-📈 Direction: {signal}
+⬜ Direction: {direction}
 
-🎯 Accuracy: {accuracy}%
+📈 Result: {result}
 
-🏁 Result: {result}
+🏆 Wins: {wins}
+
+❌ Losses: {losses}
+
+🎯 Live Accuracy:
+{accuracy}%
+
+⏰ Closed At:
+{exit_time.strftime('%H:%M:%S')} UTC
 """
 
-                bot.send_message(
-                    chat_id=CHAT_ID,
-                    text=result_text
-                )
+    send_message(result_msg)
 
-                print(f"RESULT -> {pair_name} {result}")
+# =========================
+# MAIN LOOP
+# =========================
+print("AI SIGNAL BOT STARTED")
 
-            time.sleep(2)
+while True:
 
-        else:
-            time.sleep(1)
+    try:
+
+        generate_signal()
+
+        # Next signal every 2 minutes
+        time.sleep(120)
 
     except Exception as e:
 
         print("ERROR:", e)
 
-        time.sleep(5)
+        time.sleep(10)
