@@ -1,174 +1,154 @@
-import asyncio
 import random
-from datetime import datetime, timedelta, timezone
+import time
+from datetime import datetime
 
+import yfinance as yf
 from telegram import Bot
 
 # =========================
 # TELEGRAM SETTINGS
 # =========================
+
 BOT_TOKEN = "8689634513:AAFm5KBhu2pPnwcwPnTyvS8C1BAUS9YIK7Q"
 CHAT_ID = "5974354691"
 
 bot = Bot(token=BOT_TOKEN)
 
 # =========================
-# FOREX PAIRS
+# LIVE STATS
 # =========================
-PAIRS = [
-    "EUR/USD",
-    "GBP/USD",
-    "USD/JPY",
-    "GBP/JPY",
-    "XAU/USD",
-    "AUD/USD"
-]
 
-# =========================
-# GLOBAL STATS
-# =========================
 wins = 0
 losses = 0
 
 # =========================
-# SESSION DETECTION
+# GOLD LIVE PRICE
 # =========================
-def get_session():
-    utc_hour = datetime.utcnow().hour
 
-    if 0 <= utc_hour < 7:
+def get_live_gold_price():
+    try:
+        data = yf.Ticker("GC=F")
+
+        price_data = data.history(period="1d", interval="1m")
+
+        live_price = round(price_data["Close"].iloc[-1], 2)
+
+        return live_price
+
+    except Exception as e:
+        print("PRICE ERROR:", e)
+        return None
+
+# =========================
+# MARKET SESSION
+# =========================
+
+def get_session():
+    hour = datetime.utcnow().hour
+
+    if 0 <= hour < 8:
         return "ASIAN SESSION"
 
-    elif 7 <= utc_hour < 13:
+    elif 8 <= hour < 16:
         return "LONDON SESSION"
 
-    elif 13 <= utc_hour < 21:
+    else:
         return "NEW YORK SESSION"
-
-    return "MARKET CLOSED"
 
 # =========================
 # NEWS FILTER
 # =========================
+
 def get_news():
     news = [
         "LOW IMPACT NEWS",
         "MEDIUM IMPACT NEWS",
-        "NO MAJOR NEWS"
+        "HIGH IMPACT NEWS"
     ]
+
     return random.choice(news)
 
 # =========================
-# REALISTIC PRICE GENERATOR
+# STRATEGY TEXT
 # =========================
-def generate_price(pair):
 
-    if pair == "EUR/USD":
-        return round(random.uniform(1.0700, 1.0900), 5)
+def get_strategy():
+    strategies = [
+        "Smart Money Concept + Liquidity Sweep",
+        "Breakout + BOS Confirmation",
+        "Trend Continuation + Order Block",
+        "Liquidity Grab + Reversal",
+        "SMC + Trend Confirmation"
+    ]
 
-    elif pair == "GBP/USD":
-        return round(random.uniform(1.2400, 1.2800), 5)
-
-    elif pair == "USD/JPY":
-        return round(random.uniform(150.000, 158.000), 3)
-
-    elif pair == "GBP/JPY":
-        return round(random.uniform(185.000, 198.000), 3)
-
-    elif pair == "XAU/USD":
-        return round(random.uniform(2300.00, 2450.00), 2)
-
-    elif pair == "AUD/USD":
-        return round(random.uniform(0.6400, 0.6900), 5)
-
-    return round(random.uniform(1.0000, 2.0000), 5)
+    return random.choice(strategies)
 
 # =========================
 # SIGNAL GENERATOR
 # =========================
+
 def generate_signal():
 
-    pair = random.choice(PAIRS)
+    entry_price = get_live_gold_price()
+
+    if entry_price is None:
+        return None
 
     direction = random.choice(["BUY", "SELL"])
 
-    entry = generate_price(pair)
-
-    # Pip calculations
-    if "JPY" in pair:
-        pip_value = 0.01
-    elif "XAU" in pair:
-        pip_value = 1
-    else:
-        pip_value = 0.0001
-
-    tp1_pips = random.randint(10, 20)
-    tp2_pips = random.randint(20, 35)
-    tp3_pips = random.randint(35, 60)
-
-    sl_pips = random.randint(10, 18)
+    # GOLD TP / SL
 
     if direction == "BUY":
 
-        tp1 = round(entry + (tp1_pips * pip_value), 5)
-        tp2 = round(entry + (tp2_pips * pip_value), 5)
-        tp3 = round(entry + (tp3_pips * pip_value), 5)
+        tp1 = round(entry_price + 2.0, 2)
+        tp2 = round(entry_price + 4.0, 2)
+        tp3 = round(entry_price + 6.0, 2)
 
-        sl = round(entry - (sl_pips * pip_value), 5)
+        sl = round(entry_price - 2.5, 2)
 
     else:
 
-        tp1 = round(entry - (tp1_pips * pip_value), 5)
-        tp2 = round(entry - (tp2_pips * pip_value), 5)
-        tp3 = round(entry - (tp3_pips * pip_value), 5)
+        tp1 = round(entry_price - 2.0, 2)
+        tp2 = round(entry_price - 4.0, 2)
+        tp3 = round(entry_price - 6.0, 2)
 
-        sl = round(entry + (sl_pips * pip_value), 5)
+        sl = round(entry_price + 2.5, 2)
 
-    expected_pips = tp3_pips
+    accuracy = random.randint(85, 96)
 
-    accuracy = random.randint(82, 96)
+    pips = random.randint(40, 120)
 
     session = get_session()
 
     news = get_news()
 
-    # =========================
-    # TRADE START TIME
-    # =========================
-    now = datetime.now(timezone.utc)
-
-    next_minute = (now + timedelta(minutes=1)).replace(
-        second=0,
-        microsecond=0
-    )
-
-    send_time = next_minute - timedelta(seconds=15)
+    strategy = get_strategy()
 
     return {
-        "pair": pair,
+        "pair": "XAU/USD (GOLD)",
         "direction": direction,
-        "entry": entry,
+        "entry": entry_price,
         "tp1": tp1,
         "tp2": tp2,
         "tp3": tp3,
         "sl": sl,
-        "expected_pips": expected_pips,
         "accuracy": accuracy,
+        "pips": pips,
         "session": session,
         "news": news,
-        "trade_time": next_minute,
-        "send_time": send_time
+        "strategy": strategy
     }
 
 # =========================
 # SEND SIGNAL
 # =========================
-async def send_signal(signal):
+
+def send_signal(signal):
 
     message = f"""
-🚨 AI FOREX SIGNAL 🚨
+🚨 AI GOLD SIGNAL 🚨
 
-💱 Pair: {signal['pair']}
+📊 Pair: {signal['pair']}
 
 📈 Direction: {signal['direction']}
 
@@ -180,7 +160,7 @@ async def send_signal(signal):
 
 🛑 Stop Loss: {signal['sl']}
 
-📊 Expected Pips: {signal['expected_pips']}
+📊 Expected Pips: {signal['pips']}
 
 🔥 Accuracy: {signal['accuracy']}%
 
@@ -188,22 +168,17 @@ async def send_signal(signal):
 
 📰 News: {signal['news']}
 
-⏰ Trade Starts At:
-{signal['trade_time'].strftime('%H:%M:%S UTC')}
-
 🧠 Strategy:
-Smart Money Concept + Liquidity Sweep + Trend Confirmation
+{signal['strategy']}
 """
 
-    await bot.send_message(
-        chat_id=CHAT_ID,
-        text=message
-    )
+    bot.send_message(chat_id=CHAT_ID, text=message)
 
 # =========================
 # SEND RESULT
 # =========================
-async def send_result(signal):
+
+def send_result(signal):
 
     global wins, losses
 
@@ -221,60 +196,48 @@ async def send_result(signal):
     result_message = f"""
 📢 TRADE RESULT
 
-💱 Pair: {signal['pair']}
+📊 Pair: {signal['pair']}
 
 📈 Direction: {signal['direction']}
 
-{'✅ Result: WIN' if result == 'WIN' else '❌ Result: LOSS'}
+💰 Entry: {signal['entry']}
+
+📌 Result: {result}
 
 🏆 Wins: {wins}
-
 ❌ Losses: {losses}
 
 🎯 Live Accuracy: {accuracy}%
 """
 
-    await bot.send_message(
-        chat_id=CHAT_ID,
-        text=result_message
-    )
+    bot.send_message(chat_id=CHAT_ID, text=result_message)
 
 # =========================
-# MAIN BOT LOOP
+# MAIN LOOP
 # =========================
-async def main():
 
-    print("AI FOREX BOT STARTED")
+print("AI GOLD BOT STARTED")
 
-    while True:
+while True:
+
+    try:
 
         signal = generate_signal()
 
-        now = datetime.now(timezone.utc)
+        if signal:
 
-        wait_seconds = (
-            signal["send_time"] - now
-        ).total_seconds()
+            send_signal(signal)
 
-        if wait_seconds > 0:
-            await asyncio.sleep(wait_seconds)
+            # Wait 15 minutes
+            time.sleep(900)
 
-        await send_signal(signal)
+            send_result(signal)
 
-        # Wait until trade candle closes
-        result_wait = (
-            signal["trade_time"] + timedelta(minutes=5)
-            - datetime.now(timezone.utc)
-        ).total_seconds()
+        # Wait before next signal
+        time.sleep(300)
 
-        if result_wait > 0:
-            await asyncio.sleep(result_wait)
+    except Exception as e:
 
-        await send_result(signal)
+        print("ERROR:", e)
 
-# =========================
-# START BOT
-# =========================
-if __name__ == "__main__":
-
-    asyncio.run(main())
+        time.sleep(30)
