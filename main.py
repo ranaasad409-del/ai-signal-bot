@@ -1,4 +1,5 @@
 import time
+import os
 import requests
 import pandas as pd
 import ta
@@ -9,8 +10,11 @@ from datetime import datetime
 # TELEGRAM SETTINGS
 # =====================================
 
-BOT_TOKEN = "8689634513:AAFm5KBhu2pPnwcwPnTyvS8C1BAUS9YIK7Q"
-CHAT_ID = "5974354691"
+# AUTO LOAD FROM RAILWAY VARIABLES
+
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+
+CHAT_ID = os.getenv("CHAT_ID")
 
 # =====================================
 # MARKET SETTINGS
@@ -21,10 +25,24 @@ SYMBOL = "GC=F"   # GOLD FUTURES
 CHECK_INTERVAL = 60
 
 # =====================================
+# DUPLICATE SIGNAL PROTECTION
+# =====================================
+
+last_signal = None
+
+# =====================================
 # TELEGRAM FUNCTION
 # =====================================
 
 def send_telegram(message):
+
+    # CHECK VARIABLES
+
+    if not BOT_TOKEN or not CHAT_ID:
+
+        print("Missing BOT_TOKEN or CHAT_ID")
+
+        return
 
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
 
@@ -64,8 +82,6 @@ def get_data():
             progress=False,
             auto_adjust=False
         )
-
-        # CHECK EMPTY
 
         if df.empty:
 
@@ -126,6 +142,8 @@ def get_data():
 
 def analyze_market():
 
+    global last_signal
+
     df = get_data()
 
     if df is None:
@@ -165,7 +183,9 @@ def analyze_market():
 
     latest = df.iloc[-1]
 
-    close = latest["close"]
+    close = float(latest["close"])
+
+    print("LIVE PRICE:", close)
 
     ema20 = latest["ema20"]
 
@@ -228,32 +248,72 @@ def analyze_market():
         signal = "SELL"
 
     # =====================================
-    # TP / SL
+    # PREVENT DUPLICATES
     # =====================================
+
+    if signal == last_signal:
+
+        print("Duplicate signal skipped")
+
+        return
+
+    last_signal = signal
+
+    # =====================================
+    # TP / SL CALCULATION
+    # =====================================
+
+    risk_percent = 0.002
+    reward_percent = 0.004
 
     if signal == "BUY":
 
         entry = round(close, 2)
 
-        stop_loss = round(entry - 5, 2)
+        stop_loss = round(
+            entry * (1 - risk_percent),
+            2
+        )
 
-        take_profit = round(entry + 10, 2)
+        take_profit = round(
+            entry * (1 + reward_percent),
+            2
+        )
 
     elif signal == "SELL":
 
         entry = round(close, 2)
 
-        stop_loss = round(entry + 5, 2)
+        stop_loss = round(
+            entry * (1 + risk_percent),
+            2
+        )
 
-        take_profit = round(entry - 10, 2)
+        take_profit = round(
+            entry * (1 - reward_percent),
+            2
+        )
+
+    else:
+
+        print("No strong setup found")
+
+        return
 
     # =====================================
-    # SEND SIGNAL
+    # SIGNAL CONFIDENCE
     # =====================================
 
-    if signal:
+    confidence = max(
+        buy_score,
+        sell_score
+    ) * 25
 
-        message = f"""
+    # =====================================
+    # TELEGRAM MESSAGE
+    # =====================================
+
+    message = f"""
 🔥 AI GOLD SNIPER SIGNAL 🔥
 
 📊 Symbol: GOLD (GC=F)
@@ -268,25 +328,21 @@ def analyze_market():
 
 📉 RSI: {round(rsi, 2)}
 
+⚡ Confidence: {confidence}%
+
 🕒 Time:
 {datetime.now()}
 """
 
-        print(message)
+    print(message)
 
-        send_telegram(message)
-
-    else:
-
-        print("No strong setup found")
+    send_telegram(message)
 
 # =====================================
 # START BOT
 # =====================================
 
 print("AI GOLD BOT STARTED")
-
-# TEST TELEGRAM
 
 send_telegram("✅ AI GOLD BOT CONNECTED SUCCESSFULLY")
 
