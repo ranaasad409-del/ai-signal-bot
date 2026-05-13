@@ -13,12 +13,6 @@ CHAT_ID = "5974354691"
 bot = Bot(token=BOT_TOKEN)
 
 # =======================
-# QUOTEX LOGIN
-# =======================
-QUOTEX_EMAIL = "supportquotex97@gmail.com"
-QUOTEX_PASSWORD = "Allahbadsha409@"
-
-# =======================
 # OTC PAIRS
 # =======================
 pairs = {
@@ -27,6 +21,7 @@ pairs = {
     "USD/BRL OTC": "USD/BRL"
 }
 
+# EMA SETTINGS
 FAST_EMA = 5
 SLOW_EMA = 20
 SIGNAL_LEAD_TIME = 20
@@ -65,18 +60,17 @@ def log_trade(msg):
         f.write(f"{datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC | {msg}\n")
 
 # =======================
-# Fetch latest price from Quotex chart
+# Fetch latest price
 # =======================
 async def fetch_latest_price(page, pair_name):
     try:
-        # Replace this selector with the actual chart price element
+        # Replace this selector with actual chart element
         selector = f"div:has-text('{pairs[pair_name]}') + div"
         element = await page.query_selector(selector)
         text = await element.text_content()
         price = float(text.replace(",", ""))
         return price
     except:
-        # fallback
         if price_history[pair_name]:
             last = price_history[pair_name][-1]
             return last + random.uniform(-0.1,0.1)
@@ -91,8 +85,7 @@ async def main():
         context = await browser.new_context()
         page = await context.new_page()
         await page.goto("https://quotex.io/")
-        await asyncio.sleep(5)
-        # Add login automation if needed
+        await asyncio.sleep(5)  # adjust if login automation added
         log_trade("🚀 Playwright initialized, Quotex page opened")
 
         while True:
@@ -104,7 +97,6 @@ async def main():
                 if len(price_history[pair_name]) > 50:
                     price_history[pair_name] = price_history[pair_name][-50:]
 
-                # Send sniper signal
                 if seconds_to_next_candle <= SIGNAL_LEAD_TIME:
                     if pair_name not in active_trades:
                         signal = generate_signal(price_history[pair_name])
@@ -117,7 +109,6 @@ async def main():
                             bot.send_message(chat_id=CHAT_ID, text=msg)
                             log_trade(msg)
 
-                # Check trade result after candle closes
                 if pair_name in active_trades:
                     trade = active_trades[pair_name]
                     if now >= trade["candle_open_time"] + timedelta(seconds=60):
