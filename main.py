@@ -1,7 +1,6 @@
-# bot.py
-# AI Futures Scalping Bot
-# KuCoin Futures + Telegram
-# Railway Compatible Final Version
+# main.py
+# AI Futures Scalping Telegram Bot
+# KuCoin Futures + Railway + Telegram
 
 import os
 import asyncio
@@ -69,7 +68,7 @@ exchange = ccxt.kucoinfutures({
 active_signals = {}
 
 # =====================================
-# FETCH DATA
+# FETCH MARKET DATA
 # =====================================
 
 def fetch_data(symbol):
@@ -128,7 +127,7 @@ def generate_signal(df):
     recent_high = df["high"].tail(15).max()
     recent_low = df["low"].tail(15).min()
 
-    # Tight range
+    # Tight range detection
     range_percent = (
         (recent_high - recent_low)
         / recent_low
@@ -158,7 +157,10 @@ def generate_signal(df):
         and latest["rsi"] < 45
     )
 
-    # LONG
+    # =====================================
+    # LONG SIGNAL
+    # =====================================
+
     if (
         in_range
         and latest["close"] > recent_high
@@ -169,6 +171,7 @@ def generate_signal(df):
         entry = latest["close"]
 
         return {
+
             "side": "LONG",
 
             "entry1": round(entry, 4),
@@ -181,7 +184,10 @@ def generate_signal(df):
             "sl": round(entry * 0.995, 4)
         }
 
-    # SHORT
+    # =====================================
+    # SHORT SIGNAL
+    # =====================================
+
     if (
         in_range
         and latest["close"] < recent_low
@@ -192,6 +198,7 @@ def generate_signal(df):
         entry = latest["close"]
 
         return {
+
             "side": "SHORT",
 
             "entry1": round(entry, 4),
@@ -244,7 +251,7 @@ async def send_update(message):
     )
 
 # =====================================
-# MONITOR SIGNALS
+# MONITOR ACTIVE SIGNALS
 # =====================================
 
 async def monitor_signals():
@@ -267,7 +274,10 @@ async def monitor_signals():
 
                 clean_pair = pair.replace("USDTM", "")
 
+                # =====================================
                 # LONG
+                # =====================================
+
                 if side == "LONG":
 
                     if (
@@ -308,7 +318,10 @@ async def monitor_signals():
 
                         remove_list.append(pair)
 
+                # =====================================
                 # SHORT
+                # =====================================
+
                 else:
 
                     if (
@@ -339,4 +352,84 @@ async def monitor_signals():
                             f"🏆 {clean_pair} TP3 HIT"
                         )
 
-                        remove_list.append
+                        remove_list.append(pair)
+
+                    elif price >= signal["sl"]:
+
+                        await send_update(
+                            f"❌ {clean_pair} STOP LOSS HIT"
+                        )
+
+                        remove_list.append(pair)
+
+            # Remove completed trades
+            for pair in remove_list:
+
+                del active_signals[pair]
+
+            await asyncio.sleep(5)
+
+        except Exception as e:
+
+            print("Monitor Error:", e)
+
+            await asyncio.sleep(5)
+
+# =====================================
+# MARKET SCANNER
+# =====================================
+
+async def scanner():
+
+    while True:
+
+        try:
+
+            for symbol in SYMBOLS:
+
+                # Skip active trades
+                if symbol in active_signals:
+                    continue
+
+                df = fetch_data(symbol)
+
+                signal = generate_signal(df)
+
+                if signal:
+
+                    signal["tp1_hit"] = False
+                    signal["tp2_hit"] = False
+
+                    active_signals[symbol] = signal
+
+                    await send_signal(
+                        symbol,
+                        signal
+                    )
+
+            await asyncio.sleep(SCAN_INTERVAL)
+
+        except Exception as e:
+
+            print("Scanner Error:", e)
+
+            await asyncio.sleep(10)
+
+# =====================================
+# MAIN
+# =====================================
+
+async def main():
+
+    print("AI Futures Bot Running...")
+
+    await asyncio.gather(
+        scanner(),
+        monitor_signals()
+    )
+
+# =====================================
+# START
+# =====================================
+
+asyncio.run(main())
