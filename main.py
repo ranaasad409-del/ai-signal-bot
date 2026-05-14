@@ -1,7 +1,7 @@
 # bot.py
-# Advanced AI Futures Scalping Signal Bot
-# Telegram + Binance Futures
-# Clean Sniper Signals + TP Updates
+# Advanced AI Futures Scalping Bot
+# Bybit Futures + Telegram
+# Railway Compatible
 
 import os
 import asyncio
@@ -18,23 +18,50 @@ from telegram import Bot
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 
-SYMBOLS = [
-    "BTC/USDT",
-    "ETH/USDT",
-    "SOL/USDT"
-]
-
 LEVERAGE = 20
 TIMEFRAME = "1m"
+SCAN_INTERVAL = 30
 
-SCAN_INTERVAL = 20
+SYMBOLS = [
+
+    # Major
+    "BTC/USDT:USDT",
+    "ETH/USDT:USDT",
+    "SOL/USDT:USDT",
+    "BNB/USDT:USDT",
+
+    # Trending
+    "XRP/USDT:USDT",
+    "DOGE/USDT:USDT",
+    "ADA/USDT:USDT",
+    "AVAX/USDT:USDT",
+    "LINK/USDT:USDT",
+
+    # Volatile
+    "1000PEPE/USDT:USDT",
+    "WIF/USDT:USDT",
+    "SUI/USDT:USDT",
+    "NEAR/USDT:USDT",
+    "APT/USDT:USDT",
+
+    # Momentum
+    "ARB/USDT:USDT",
+    "OP/USDT:USDT",
+    "INJ/USDT:USDT",
+    "SEI/USDT:USDT",
+    "TIA/USDT:USDT"
+]
 
 bot = Bot(token=BOT_TOKEN)
 
-exchange = ccxt.binance({
+# =====================================
+# EXCHANGE
+# =====================================
+
+exchange = ccxt.bybit({
     "enableRateLimit": True,
     "options": {
-        "defaultType": "future"
+        "defaultType": "linear"
     }
 })
 
@@ -99,7 +126,7 @@ def generate_signal(df):
         (recent_high - recent_low) / recent_low
     ) * 100
 
-    # Market compression
+    # Tight range
     in_range = range_percent < 0.5
 
     # Volume spike
@@ -107,20 +134,21 @@ def generate_signal(df):
 
     volume_spike = latest["volume"] > avg_volume * 1.5
 
-    # Trend
+    # Bullish trend
     bullish = (
         latest["ema9"] > latest["ema21"]
         and latest["macd"] > latest["macd_signal"]
         and latest["rsi"] > 55
     )
 
+    # Bearish trend
     bearish = (
         latest["ema9"] < latest["ema21"]
         and latest["macd"] < latest["macd_signal"]
         and latest["rsi"] < 45
     )
 
-    # LONG
+    # LONG SIGNAL
     if (
         in_range
         and latest["close"] > recent_high
@@ -132,15 +160,17 @@ def generate_signal(df):
 
         return {
             "side": "LONG",
-            "entry1": round(entry, 2),
-            "entry2": round(entry * 1.0005, 2),
-            "tp1": round(entry * 1.003, 2),
-            "tp2": round(entry * 1.006, 2),
-            "tp3": round(entry * 1.01, 2),
-            "sl": round(entry * 0.995, 2)
+            "entry1": round(entry, 4),
+            "entry2": round(entry * 1.0005, 4),
+
+            "tp1": round(entry * 1.003, 4),
+            "tp2": round(entry * 1.006, 4),
+            "tp3": round(entry * 1.01, 4),
+
+            "sl": round(entry * 0.995, 4)
         }
 
-    # SHORT
+    # SHORT SIGNAL
     if (
         in_range
         and latest["close"] < recent_low
@@ -152,12 +182,14 @@ def generate_signal(df):
 
         return {
             "side": "SHORT",
-            "entry1": round(entry, 2),
-            "entry2": round(entry * 0.9995, 2),
-            "tp1": round(entry * 0.997, 2),
-            "tp2": round(entry * 0.994, 2),
-            "tp3": round(entry * 0.99, 2),
-            "sl": round(entry * 1.005, 2)
+            "entry1": round(entry, 4),
+            "entry2": round(entry * 0.9995, 4),
+
+            "tp1": round(entry * 0.997, 4),
+            "tp2": round(entry * 0.994, 4),
+            "tp3": round(entry * 0.99, 4),
+
+            "sl": round(entry * 1.005, 4)
         }
 
     return None
@@ -168,7 +200,7 @@ def generate_signal(df):
 
 async def send_signal(symbol, signal):
 
-    pair = symbol.replace("/", "")
+    pair = symbol.replace("/USDT:USDT", "")
 
     text = f"""
 🚨 {pair} | {signal['side']} | {LEVERAGE}x
@@ -200,7 +232,7 @@ async def send_update(message):
     )
 
 # =====================================
-# TRACK SIGNALS
+# MONITOR ACTIVE SIGNALS
 # =====================================
 
 async def monitor_signals():
@@ -211,7 +243,7 @@ async def monitor_signals():
 
             remove_list = []
 
-            for pair in active_signals:
+            for pair in list(active_signals.keys()):
 
                 signal = active_signals[pair]
 
@@ -232,7 +264,7 @@ async def monitor_signals():
                         signal["tp1_hit"] = True
 
                         await send_update(
-                            f"✅ {pair.replace('/', '')} TP1 HIT"
+                            f"✅ {pair.replace('/USDT:USDT', '')} TP1 HIT"
                         )
 
                     if (
@@ -243,21 +275,21 @@ async def monitor_signals():
                         signal["tp2_hit"] = True
 
                         await send_update(
-                            f"🔥 {pair.replace('/', '')} TP2 HIT"
+                            f"🔥 {pair.replace('/USDT:USDT', '')} TP2 HIT"
                         )
 
                     if price >= signal["tp3"]:
 
                         await send_update(
-                            f"🏆 {pair.replace('/', '')} TP3 HIT"
+                            f"🏆 {pair.replace('/USDT:USDT', '')} TP3 HIT"
                         )
 
                         remove_list.append(pair)
 
-                    if price <= signal["sl"]:
+                    elif price <= signal["sl"]:
 
                         await send_update(
-                            f"❌ {pair.replace('/', '')} STOP LOSS HIT"
+                            f"❌ {pair.replace('/USDT:USDT', '')} STOP LOSS HIT"
                         )
 
                         remove_list.append(pair)
@@ -273,7 +305,7 @@ async def monitor_signals():
                         signal["tp1_hit"] = True
 
                         await send_update(
-                            f"✅ {pair.replace('/', '')} TP1 HIT"
+                            f"✅ {pair.replace('/USDT:USDT', '')} TP1 HIT"
                         )
 
                     if (
@@ -284,21 +316,21 @@ async def monitor_signals():
                         signal["tp2_hit"] = True
 
                         await send_update(
-                            f"🔥 {pair.replace('/', '')} TP2 HIT"
+                            f"🔥 {pair.replace('/USDT:USDT', '')} TP2 HIT"
                         )
 
                     if price <= signal["tp3"]:
 
                         await send_update(
-                            f"🏆 {pair.replace('/', '')} TP3 HIT"
+                            f"🏆 {pair.replace('/USDT:USDT', '')} TP3 HIT"
                         )
 
                         remove_list.append(pair)
 
-                    if price >= signal["sl"]:
+                    elif price >= signal["sl"]:
 
                         await send_update(
-                            f"❌ {pair.replace('/', '')} STOP LOSS HIT"
+                            f"❌ {pair.replace('/USDT:USDT', '')} STOP LOSS HIT"
                         )
 
                         remove_list.append(pair)
@@ -313,7 +345,7 @@ async def monitor_signals():
             await asyncio.sleep(5)
 
 # =====================================
-# MARKET SCANNER
+# SCANNER
 # =====================================
 
 async def scanner():
@@ -324,6 +356,7 @@ async def scanner():
 
             for symbol in SYMBOLS:
 
+                # Skip if active trade exists
                 if symbol in active_signals:
                     continue
 
@@ -333,12 +366,12 @@ async def scanner():
 
                 if signal:
 
-                    await send_signal(symbol, signal)
-
                     signal["tp1_hit"] = False
                     signal["tp2_hit"] = False
 
                     active_signals[symbol] = signal
+
+                    await send_signal(symbol, signal)
 
             await asyncio.sleep(SCAN_INTERVAL)
 
@@ -352,11 +385,11 @@ async def scanner():
 
 async def main():
 
+    print("AI Futures Bot Running...")
+
     await asyncio.gather(
         scanner(),
         monitor_signals()
     )
-
-print("AI Futures Bot Running...")
 
 asyncio.run(main())
