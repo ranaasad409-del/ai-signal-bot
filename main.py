@@ -5,43 +5,35 @@ import requests
 
 app = Flask(__name__)
 
-# 1. Grab environment variables from Railway settings
-BOT_TOKEN = os.environ.get("TELEGRAM_TOKEN")
-# Note: You can find your Channel ID by forwarding a message from it to @userinfobot
-CHANNEL_ID = os.environ.get("TELEGRAM_CHANNEL_ID") 
+# Matches your exact Railway settings from screenshot 1000197704.jpg
+BOT_TOKEN = os.environ.get("BOT_TOKEN")
+CHANNEL_ID = os.environ.get("CHAT_ID") 
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 @app.route('/')
 def home():
-    return "Forex Webhook Server is Alive!", 200
+    return "Webhook Server running successfully!", 200
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
-    """
-    Receives alerts from TradingView and forwards formatted text to Telegram.
-    """
     try:
-        # Accept text/plain data natively sent by TradingView alerts
         data = request.data.decode('utf-8')
-        logger.info(f"Received raw text alert: {data}")
+        logger.info(f"Alert data received: {data}")
 
         if not data:
-            return "Empty request payload", 400
+            return "Payload empty", 400
 
-        # Expected incoming text structure from your TradingView Alert text box:
-        # EUR/USD, SELL, 1.1601, 1.1581, 1.1561, 1.1541, 1.1661
+        # Expecting text format: EUR/USD, SELL, 1.1601, 1.1581, 1.1561, 1.1541, 1.1661
         parts = [p.strip() for p in data.split(',')]
 
         if len(parts) < 7:
-            logger.warning("Received invalid text format. Sending raw text fallback.")
-            # If the text format doesn't match, just forward whatever TradingView sent natively
             final_message = data
         else:
             pair, direction, entry, tp1, tp2, tp3, sl = parts
             
-            # Replicate the exact visual layout from the user screenshot
+            # Format perfectly to match your original screenshot
             final_message = (
                 f"🔔 **{pair.upper()}** 🔔\n\n"
                 f"Direction: **{direction.upper()}**\n"
@@ -52,7 +44,7 @@ def webhook():
                 f"SL       {sl}"
             )
 
-        # Broadcast message via Telegram Bot API
+        # Broadcast text payload straight to Telegram API channel
         telegram_url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
         payload = {
             "chat_id": CHANNEL_ID,
@@ -61,15 +53,12 @@ def webhook():
         }
         
         response = requests.post(telegram_url, json=payload)
-        logger.info(f"Telegram API Response: {response.text}")
-
-        return "Alert sent to Telegram successfully!", 200
+        return "Dispatched to Telegram!", 200
 
     except Exception as e:
-        logger.error(f"Error handling webhook alert request: {e}")
-        return "Internal server webhook error", 500
+        logger.error(f"Webhook execution failure: {e}")
+        return "Internal Error", 500
 
 if __name__ == '__main__':
-    # Railway passes a target PORT variable automatically
     port = int(os.environ.get("PORT", 8080))
     app.run(host='0.0.0.0', port=port)
