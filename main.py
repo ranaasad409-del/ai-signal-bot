@@ -1,247 +1,88 @@
-# ============================================
-# GOLD FOREX TELEGRAM SIGNAL BOT
-# XAU/USD AI SIGNAL BOT
-# ============================================
+import os
+import logging
+from telegram import Update
+from telegram.ext import Application, CommandHandler, ContextTypes
 
-# INSTALL:
-# pip install python-telegram-bot==13.15
-# pip install MetaTrader5 pandas ta requests schedule
+# 1. Read the secret token from Railway's environment variables
+BOT_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 
-# ============================================
-# CONFIG
-# ============================================
+# 2. Configure logging to monitor the bot's health in Railway logs
+logging.basicConfig(
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", 
+    level=logging.INFO
+)
+logger = logging.getLogger(__name__)
 
-BOT_TOKEN = "YOUR_BOT_TOKEN"
-CHANNEL_ID = "@yourchannel"
-
-SYMBOL = "XAUUSD"
-
-TIMEFRAME = "M5"
-
-RISK_REWARD = 2
-
-# ============================================
-# IMPORTS
-# ============================================
-
-import MetaTrader5 as mt5
-import pandas as pd
-import ta
-import time
-import requests
-import schedule
-
-from telegram import Bot
-from datetime import datetime
-
-# ============================================
-# TELEGRAM BOT
-# ============================================
-
-bot = Bot(token=BOT_TOKEN)
-
-# ============================================
-# MT5 CONNECT
-# ============================================
-
-if not mt5.initialize():
-    print("MT5 Initialization Failed")
-    quit()
-
-print("MT5 Connected")
-
-# ============================================
-# GET MARKET DATA
-# ============================================
-
-def get_data():
-
-    rates = mt5.copy_rates_from_pos(
-        SYMBOL,
-        mt5.TIMEFRAME_M5,
-        0,
-        200
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Greets the admin or user."""
+    await update.message.reply_text(
+        "⚡ Forex Signal Bot is Active!\n\n"
+        "Use this format to send a signal:\n"
+        "`/send_signal EUR/USD SELL 1.1601 1.1581 1.1561 1.1541 1.1661`",
+        parse_mode="Markdown"
     )
 
-    df = pd.DataFrame(rates)
+async def send_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Parses arguments and broadcasts the beautifully formatted Forex signal.
+    """
+    try:
+        args = context.args
+        # Validate that we have exactly 7 required arguments
+        if len(args) != 7:
+            await update.message.reply_text(
+                "❌ **Incorrect Arguments!**\n\n"
+                "**Expected Format:**\n"
+                "`/send_signal [Pair] [Direction] [Entry] [TP1] [TP2] [TP3] [SL]`\n\n"
+                "**Example:**\n"
+                "`/send_signal EUR/USD SELL 1.1601 1.1581 1.1561 1.1541 1.1661`",
+                parse_mode="Markdown"
+            )
+            return
 
-    df['time'] = pd.to_datetime(df['time'], unit='s')
+        # Extract parameters
+        pair = args[0].upper()          # e.g., EUR/USD
+        direction = args[1].upper()     # e.g., SELL
+        entry = args[2]                 # e.g., 1.1601
+        tp1 = args[3]                   # e.g., 1.1581
+        tp2 = args[4]                   # e.g., 1.1561
+        tp3 = args[5]                   # e.g., 1.1541
+        sl = args[6]                    # e.g., 1.1661
 
-    return df
+        # Match the visual layout from your screenshot perfectly
+        signal_message = (
+            f"🔔 **{pair}** 🔔\n\n"
+            f"Direction: **{direction}**\n"
+            f"Entry Price:  {entry}\n\n"
+            f"TP1     {tp1}\n"
+            f"TP2     {tp2}\n"
+            f"TP3     {tp3}\n\n"
+            f"SL       {sl}"
+        )
 
-# ============================================
-# ANALYSIS
-# ============================================
+        # Send the clean layout back to the channel or chat
+        await update.message.reply_text(signal_message, parse_mode="Markdown")
 
-def analyze_market():
+    except Exception as e:
+        logger.error(f"Error processing signal: {e}")
+        await update.message.reply_text("⚠️ An internal error occurred while formatting the signal.")
 
-    df = get_data()
-
-    # EMA
-    df['ema20'] = ta.trend.ema_indicator(df['close'], window=20)
-    df['ema50'] = ta.trend.ema_indicator(df['close'], window=50)
-
-    # RSI
-    df['rsi'] = ta.momentum.rsi(df['close'], window=14)
-
-    # MACD
-    macd = ta.trend.MACD(df['close'])
-
-    df['macd'] = macd.macd()
-    df['macd_signal'] = macd.macd_signal()
-
-    # ATR
-    atr = ta.volatility.AverageTrueRange(
-        df['high'],
-        df['low'],
-        df['close']
-    )
-
-    df['atr'] = atr.average_true_range()
-
-    last = df.iloc[-1]
-
-    price = round(last['close'], 2)
-
-    signal = None
-
-    # BUY CONDITIONS
-    if (
-        last['ema20'] > last['ema50']
-        and last['rsi'] > 55
-        and last['macd'] > last['macd_signal']
-    ):
-
-        sl = round(price - (last['atr'] * 1.5), 2)
-
-        tp1 = round(price + (last['atr'] * 1.5), 2)
-        tp2 = round(price + (last['atr'] * 3), 2)
-        tp3 = round(price + (last['atr'] * 5), 2)
-
-        signal = {
-            "type": "BUY",
-            "entry": price,
-            "sl": sl,
-            "tp1": tp1,
-            "tp2": tp2,
-            "tp3": tp3,
-            "confidence": "89%"
-        }
-
-    # SELL CONDITIONS
-    elif (
-        last['ema20'] < last['ema50']
-        and last['rsi'] < 45
-        and last['macd'] < last['macd_signal']
-    ):
-
-        sl = round(price + (last['atr'] * 1.5), 2)
-
-        tp1 = round(price - (last['atr'] * 1.5), 2)
-        tp2 = round(price - (last['atr'] * 3), 2)
-        tp3 = round(price - (last['atr'] * 5), 2)
-
-        signal = {
-            "type": "SELL",
-            "entry": price,
-            "sl": sl,
-            "tp1": tp1,
-            "tp2": tp2,
-            "tp3": tp3,
-            "confidence": "87%"
-        }
-
-    return signal
-
-# ============================================
-# SEND SIGNAL
-# ============================================
-
-def send_signal():
-
-    signal = analyze_market()
-
-    if signal is None:
-        print("No Signal")
+def main():
+    """Main execution point."""
+    if not BOT_TOKEN:
+        logger.critical("FATAL: TELEGRAM_TOKEN environment variable is missing!")
         return
 
-    message = f"""
-━━━━━━━━━━━━━━
-🔥 GOLD VIP SIGNAL 🔥
-━━━━━━━━━━━━━━
+    # Build the application
+    app = Application.builder().token(BOT_TOKEN).build()
 
-Pair: XAU/USD
-Type: {signal['type']}
+    # Link Telegram commands to functions
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("send_signal", send_signal))
 
-Entry Price:
-{signal['entry']}
+    # Start the bot engine (Keeps running 24/7 on Railway)
+    logger.info("Starting bot deployment script...")
+    app.run_polling()
 
-🎯 TP1 → {signal['tp1']}
-🎯 TP2 → {signal['tp2']}
-🎯 TP3 → {signal['tp3']}
-
-🛑 Stop Loss:
-{signal['sl']}
-
-⚡ Confidence:
-{signal['confidence']}
-
-📊 Strategy:
-EMA + RSI + MACD + ATR
-
-⏰ Time:
-{datetime.now().strftime('%H:%M:%S')}
-━━━━━━━━━━━━━━
-"""
-
-    bot.send_message(
-        chat_id=CHANNEL_ID,
-        text=message
-    )
-
-    print("Signal Sent")
-
-# ============================================
-# NEWS FILTER
-# ============================================
-
-def high_impact_news():
-
-    # SIMPLE FILTER
-    # You can connect ForexFactory API later
-
-    current_hour = datetime.utcnow().hour
-
-    # Avoid volatility times
-    blocked_hours = [12, 13]
-
-    if current_hour in blocked_hours:
-        return True
-
-    return False
-
-# ============================================
-# MAIN BOT LOOP
-# ============================================
-
-def run_bot():
-
-    if high_impact_news():
-        print("High Impact News Time")
-        return
-
-    send_signal()
-
-# ============================================
-# AUTO RUN EVERY 5 MINUTES
-# ============================================
-
-schedule.every(5).minutes.do(run_bot)
-
-print("Gold Signal Bot Running 24/7...")
-
-while True:
-
-    schedule.run_pending()
-
-    time.sleep(1)
+if __name__ == "__main__":
+    main()
