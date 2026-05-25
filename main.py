@@ -1,137 +1,124 @@
-import asyncio
+import time
+import logging
 import pandas as pd
-import yfinance as yf
-from ta.trend import EMAIndicator
-from ta.momentum import RSIIndicator
+import pandas_ta as ta
 from telegram import Bot
-from datetime import datetime
+from quotexpy import Quotex
 
-TOKEN = "8689634513:AAFm5KBhu2pPnwcwPnTyvS8C1BAUS9YIK7Q"
-CHAT_ID = "5974354691"
+# --- SETTINGS ---
+TELEGRAM_TOKEN = "YOUR_TELEGRAM_BOT_TOKEN"
+CHAT_ID = "YOUR_PERSONAL_TELEGRAM_CHAT_ID" # Jahan aap ko signal chahiye
+QUOTEX_EMAIL = "your_email@gmail.com"
+QUOTEX_PASSWORD = "your_password"
 
-bot = Bot(token=TOKEN)
+# Jin OTC pairs par aap trade karna chahte hain
+OTC_PAIRS = ["EURUSD_otc", "GBPUSD_otc", "USDJPY_otc"]
+# ----------------
 
-PAIRS = {
-    "EURUSD": "EURUSD=X",
-    "GBPUSD": "GBPUSD=X",
-    "USDJPY": "JPY=X",
-    "AUDUSD": "AUDUSD=X"
-}
+# Logging setup
+logging.basicConfig(level=logging.INFO)
+tg_bot = Bot(token=TELEGRAM_TOKEN)
 
+# Quotex Connection
+client = Quotex(email=QUOTEX_EMAIL, password=QUOTEX_PASSWORD, root_path=".")
 
-def bullish_engulfing(df):
-    if len(df) < 3:
-        return False
+def connect_quotex():
+    if not client.check_connect():
+        print("🔄 Quotex OTC Data Server se connect ho raha hai...")
+        client.connect()
+        print("✅ Connected to Quotex Server!")
 
-    prev = df.iloc[-2]
-    curr = df.iloc[-1]
+def analyze_market(candles):
+    """
+    1-Minute Candles ko analyze kar k High-Accuracy Signal nikalna
+    """
+    df = pd.DataFrame(candles)
+    # df columns: ['time', 'open', 'close', 'high', 'low', 'volume']
+    
+    if df.empty or len(df) < 30:
+        return None
 
-    return (
-        prev['Close'] < prev['Open'] and
-        curr['Close'] > curr['Open'] and
-        curr['Close'] > prev['Open'] and
-        curr['Open'] < prev['Close']
-    )
+    # Technical Indicators Calculate karna
+    df['RSI'] = ta.rsi(df['close'], length=14)
+    # Stochastic Oscillator
+    stoch = ta.stoch(df['high'], df['low'], df['close'], k=14, d=3)
+    df['STOCHk'] = stoch['STOCHk_14_3_3']
+    df['STOCHd'] = stoch['STOCHd_14_3_3']
+    # Trend Filter (EMA 50)
+    df['EMA_50'] = ta.ema(df['close'], length=50)
 
+    # Aakhri complete candle ka data check karna
+    last_row = df.iloc[-1]
+    
+    rsi_val = last_row['RSI']
+    stoch_k = last_row['STOCHk']
+    stoch_d = last_row['STOCHd']
+    close_price = last_row['close']
+    ema_50 = last_row['EMA_50']
 
-def bearish_engulfing(df):
-    if len(df) < 3:
-        return False
+    # --- LOW ERROR SIGNAL STRATEGY (1-MIN REVERSAL) ---
+    
+    # 🟢 CALL (BUY) SIGNAL: Market oversold ho aur structural support strong ho
+    if rsi_val < 30 and stoch_k < 20 and stoch_k > stoch_d:
+        # Extra filter: Agar price EMA 50 se upar hai to major trend buy ka hai
+        return "CALL 🟢 (Buy)"
 
-    prev = df.iloc[-2]
-    curr = df.iloc[-1]
-
-    return (
-        prev['Close'] > prev['Open'] and
-        curr['Close'] < curr['Open'] and
-        curr['Open'] > prev['Close'] and
-        curr['Close'] < prev['Open']
-    )
-
-
-def get_data(symbol):
-    df = yf.download(
-        tickers=symbol,
-        interval="1m",
-        period="1d",
-        progress=False
-    )
-
-    df.dropna(inplace=True)
-
-    df['ema9'] = EMAIndicator(df['Close'], window=9).ema_indicator()
-    df['ema21'] = EMAIndicator(df['Close'], window=21).ema_indicator()
-    df['rsi'] = RSIIndicator(df['Close'], window=14).rsi()
-
-    return df
-
-
-def analyze(df):
-    last = df.iloc[-1]
-
-    buy_condition = (
-        last['ema9'] > last['ema21'] and
-        45 < last['rsi'] < 70 and
-        bullish_engulfing(df)
-    )
-
-    sell_condition = (
-        last['ema9'] < last['ema21'] and
-        30 < last['rsi'] < 55 and
-        bearish_engulfing(df)
-    )
-
-    if buy_condition:
-        return "BUY"
-
-    if sell_condition:
-        return "SELL"
+    # 🔴 PUT (SELL) SIGNAL: Market overbought ho aur resistance strong ho
+    elif rsi_val > 70 and stoch_k > 80 and stoch_k < stoch_d:
+        return "PUT 🔴 (Sell)"
 
     return None
 
+async def send_telegram_signal(pair, direction):
+    """Telegram par clear signal notification bhejna"""
+    message = (
+        f"🎯 **QUOTEX OTC SIGNAL** 🎯\n\n"
+        f"📊 **Pair:** {pair.replace('_otc', '').upper()} (OTC)\n"
+        f"⏰ **Timeframe:** 1 MINUTE\n"
+        f"🚀 **Action:** {direction}\n"
+        f"⏳ **Duration:** 1 MIN\n\n"
+        f"⚠️ *Note: Apni confirmation k baad manual trade open karein.*"
+    )
+    try:
+        await tg_bot.send_message(chat_id=CHAT_ID, text=message, parse_mode="Markdown")
+        print(f"📡 Signal sent for {pair}: {direction}")
+    except Exception as e:
+        print(f"❌ Telegram message failed: {e}")
 
-async def send_signal(pair, signal):
-    current_time = datetime.now().strftime("%H:%M:%S")
-
-    msg = f"""
-📊 SIGNAL ALERT
-
-PAIR: {pair}
-TIMEFRAME: 1 MINUTE
-SIGNAL: {signal}
-ENTRY: NEXT CANDLE
-TIME: {current_time}
-
-Strategy:
-EMA9 + EMA21 + RSI + Engulfing Candle
-"""
-
-    await bot.send_message(chat_id=CHAT_ID, text=msg)
-
-
-async def scanner():
-    last_signals = {}
+def main():
+    connect_quotex()
+    print("📡 Market monitor shuru ho gaya hai. Low error signals ka intezar hai...")
+    
+    # Her pair k aakhri signal ka record rakhne k liye taake baar baar same signal na aaye
+    last_signal_time = {pair: 0 for pair in OTC_PAIRS}
 
     while True:
         try:
-            for pair_name, symbol in PAIRS.items():
-                df = get_data(symbol)
-
-                signal = analyze(df)
-
-                if signal:
-                    previous = last_signals.get(pair_name)
-
-                    if previous != signal:
-                        await send_signal(pair_name, signal)
-                        last_signals[pair_name] = signal
-
-                        print(f"{pair_name}: {signal}")
-
+            connect_quotex() # Connection active rakhne k liye
+            
+            for pair in OTC_PAIRS:
+                current_time = time.time()
+                
+                # Har 1 minute baad candle data refresh karna
+                if current_time - last_signal_time[pair] > 60:
+                    # Quotex se live candles lena (1-min time frame = 60 seconds)
+                    # 30 candles kafi hain indicators calculate karne k liye
+                    candles = client.get_candles(pair, 60, 30) 
+                    
+                    if candles:
+                        signal = analyze_market(candles)
+                        
+                        if signal:
+                            # Live signal send karna asyncio loop use kar k
+                            import asyncio
+                            asyncio.run(send_telegram_signal(pair, signal))
+                            last_signal_time[pair] = current_time # Cool down for 1 min
+                            
+            time.sleep(5) # Har 5 second baad check karein loop ko
+            
         except Exception as e:
-            print(e)
+            print(f"⚠️ Loop Error: {e}")
+            time.sleep(10)
 
-        await asyncio.sleep(60)
-
-
-asyncio.run(scanner())
+if __name__ == "__main__":
+    main()
