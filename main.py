@@ -1,24 +1,6 @@
-import subprocess
-import sys
 import time
 import logging
 import asyncio
-
-# --- FULLY INDEPENDENT BACKGROUND INSTALLER ---
-def install_package(package_name, install_link=None):
-    try:
-        __import__(package_name)
-    except ImportError:
-        print(f"📦 Installing {package_name} background me...")
-        link = install_link if install_link else package_name
-        subprocess.check_call([sys.executable, "-m", "pip", "install", "--no-cache-dir", link])
-
-# Saari problematic libraries ko script chalte hi background me install karna
-install_package("pandas")
-install_package("pandas_ta", "pandas-ta")
-install_package("quotexpy", "git+https://github.com/nand0st/quotexpy.git")
-
-# Ab libraries ko real import karna
 import pandas as pd
 import pandas_ta as ta
 from telegram import Bot
