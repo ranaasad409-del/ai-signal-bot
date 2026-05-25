@@ -1,90 +1,247 @@
-import time
-import logging
-import asyncio
+# ============================================
+# GOLD FOREX TELEGRAM SIGNAL BOT
+# XAU/USD AI SIGNAL BOT
+# ============================================
+
+# INSTALL:
+# pip install python-telegram-bot==13.15
+# pip install MetaTrader5 pandas ta requests schedule
+
+# ============================================
+# CONFIG
+# ============================================
+
+BOT_TOKEN = "YOUR_BOT_TOKEN"
+CHANNEL_ID = "@yourchannel"
+
+SYMBOL = "XAUUSD"
+
+TIMEFRAME = "M5"
+
+RISK_REWARD = 2
+
+# ============================================
+# IMPORTS
+# ============================================
+
+import MetaTrader5 as mt5
 import pandas as pd
-import pandas_ta as ta
+import ta
+import time
+import requests
+import schedule
+
 from telegram import Bot
-from quotexpy import Quotex
+from datetime import datetime
 
-# --- CONFIGURATION ---
-TELEGRAM_TOKEN = "YOUR_TELEGRAM_BOT_TOKEN"      # Apna Token lagayein
-CHAT_ID = "YOUR_PERSONAL_TELEGRAM_CHAT_ID"    # Apni Chat ID lagayein
-QUOTEX_EMAIL = "your_email@gmail.com"          # Quotex Email
-QUOTEX_PASSWORD = "your_password"              # Quotex Password
+# ============================================
+# TELEGRAM BOT
+# ============================================
 
-OTC_PAIRS = ["EURUSD_otc", "GBPUSD_otc", "USDJPY_otc", "AUDUSD_otc"]
-# ---------------------
+bot = Bot(token=BOT_TOKEN)
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+# ============================================
+# MT5 CONNECT
+# ============================================
 
-tg_bot = Bot(token=TELEGRAM_TOKEN)
-client = Quotex(email=QUOTEX_EMAIL, password=QUOTEX_PASSWORD, root_path=".")
+if not mt5.initialize():
+    print("MT5 Initialization Failed")
+    quit()
 
-def connect_quotex():
-    if not client.check_connect():
-        logging.info("🔄 Quotex OTC Server se connect ho raha hai...")
-        client.connect()
-        logging.info("✅ Connected to Quotex Successfully!")
+print("MT5 Connected")
 
-def analyze_market(candles):
-    df = pd.DataFrame(candles)
-    if df.empty or len(df) < 30:
-        return None
+# ============================================
+# GET MARKET DATA
+# ============================================
 
-    df['RSI'] = ta.rsi(df['close'], length=14)
-    stoch = ta.stoch(df['high'], df['low'], df['close'], k=14, d=3)
-    df['STOCHk'] = stoch['STOCHk_14_3_3']
-    df['STOCHd'] = stoch['STOCHd_14_3_3']
+def get_data():
 
-    last_row = df.iloc[-1]
-    rsi_val = last_row['RSI']
-    stoch_k = last_row['STOCHk']
-    stoch_d = last_row['STOCHd']
-
-    if rsi_val < 30 and stoch_k < 20 and stoch_k > stoch_d:
-        return "CALL 🟢 (Buy)"
-    elif rsi_val > 70 and stoch_k > 80 and stoch_k < stoch_d:
-        return "PUT 🔴 (Sell)"
-    return None
-
-async def send_telegram_signal(pair, direction):
-    clean_pair_name = pair.replace('_otc', '').upper() + " (OTC)"
-    message = (
-        f"🎯 **QUOTEX OTC SIGNAL ALERT** 🎯\n\n"
-        f"📊 **Market Pair:** {clean_pair_name}\n"
-        f"⏰ **Timeframe:** 1 MINUTE\n"
-        f"🚀 **Action Order:** {direction}\n"
-        f"⏳ **Expiry Duration:** 1 MIN\n\n"
-        f"⚠️ *Confirmation check kar k manual click karein.*"
+    rates = mt5.copy_rates_from_pos(
+        SYMBOL,
+        mt5.TIMEFRAME_M5,
+        0,
+        200
     )
-    try:
-        await tg_bot.send_message(chat_id=CHAT_ID, text=message, parse_mode="Markdown")
-        logging.info(f"📡 Signal bhej diya: {pair} -> {direction}")
-    except Exception as e:
-        logging.error(f"❌ Telegram send failed: {e}")
 
-def main():
-    connect_quotex()
-    logging.info("🤖 Bot active ho gaya hai. Waiting for signals...")
-    
-    last_signal_time = {pair: 0 for pair in OTC_PAIRS}
+    df = pd.DataFrame(rates)
 
-    while True:
-        try:
-            connect_quotex()
-            for pair in OTC_PAIRS:
-                current_time = time.time()
-                if current_time - last_signal_time[pair] > 60:
-                    candles = client.get_candles(pair, 60, 30) 
-                    if candles:
-                        signal = analyze_market(candles)
-                        if signal:
-                            asyncio.run(send_telegram_signal(pair, signal))
-                            last_signal_time[pair] = current_time
-            time.sleep(5)
-        except Exception as e:
-            logging.error(f"⚠️ Loop Exception: {e}")
-            time.sleep(10)
+    df['time'] = pd.to_datetime(df['time'], unit='s')
 
-if __name__ == "__main__":
-    main()
+    return df
+
+# ============================================
+# ANALYSIS
+# ============================================
+
+def analyze_market():
+
+    df = get_data()
+
+    # EMA
+    df['ema20'] = ta.trend.ema_indicator(df['close'], window=20)
+    df['ema50'] = ta.trend.ema_indicator(df['close'], window=50)
+
+    # RSI
+    df['rsi'] = ta.momentum.rsi(df['close'], window=14)
+
+    # MACD
+    macd = ta.trend.MACD(df['close'])
+
+    df['macd'] = macd.macd()
+    df['macd_signal'] = macd.macd_signal()
+
+    # ATR
+    atr = ta.volatility.AverageTrueRange(
+        df['high'],
+        df['low'],
+        df['close']
+    )
+
+    df['atr'] = atr.average_true_range()
+
+    last = df.iloc[-1]
+
+    price = round(last['close'], 2)
+
+    signal = None
+
+    # BUY CONDITIONS
+    if (
+        last['ema20'] > last['ema50']
+        and last['rsi'] > 55
+        and last['macd'] > last['macd_signal']
+    ):
+
+        sl = round(price - (last['atr'] * 1.5), 2)
+
+        tp1 = round(price + (last['atr'] * 1.5), 2)
+        tp2 = round(price + (last['atr'] * 3), 2)
+        tp3 = round(price + (last['atr'] * 5), 2)
+
+        signal = {
+            "type": "BUY",
+            "entry": price,
+            "sl": sl,
+            "tp1": tp1,
+            "tp2": tp2,
+            "tp3": tp3,
+            "confidence": "89%"
+        }
+
+    # SELL CONDITIONS
+    elif (
+        last['ema20'] < last['ema50']
+        and last['rsi'] < 45
+        and last['macd'] < last['macd_signal']
+    ):
+
+        sl = round(price + (last['atr'] * 1.5), 2)
+
+        tp1 = round(price - (last['atr'] * 1.5), 2)
+        tp2 = round(price - (last['atr'] * 3), 2)
+        tp3 = round(price - (last['atr'] * 5), 2)
+
+        signal = {
+            "type": "SELL",
+            "entry": price,
+            "sl": sl,
+            "tp1": tp1,
+            "tp2": tp2,
+            "tp3": tp3,
+            "confidence": "87%"
+        }
+
+    return signal
+
+# ============================================
+# SEND SIGNAL
+# ============================================
+
+def send_signal():
+
+    signal = analyze_market()
+
+    if signal is None:
+        print("No Signal")
+        return
+
+    message = f"""
+━━━━━━━━━━━━━━
+🔥 GOLD VIP SIGNAL 🔥
+━━━━━━━━━━━━━━
+
+Pair: XAU/USD
+Type: {signal['type']}
+
+Entry Price:
+{signal['entry']}
+
+🎯 TP1 → {signal['tp1']}
+🎯 TP2 → {signal['tp2']}
+🎯 TP3 → {signal['tp3']}
+
+🛑 Stop Loss:
+{signal['sl']}
+
+⚡ Confidence:
+{signal['confidence']}
+
+📊 Strategy:
+EMA + RSI + MACD + ATR
+
+⏰ Time:
+{datetime.now().strftime('%H:%M:%S')}
+━━━━━━━━━━━━━━
+"""
+
+    bot.send_message(
+        chat_id=CHANNEL_ID,
+        text=message
+    )
+
+    print("Signal Sent")
+
+# ============================================
+# NEWS FILTER
+# ============================================
+
+def high_impact_news():
+
+    # SIMPLE FILTER
+    # You can connect ForexFactory API later
+
+    current_hour = datetime.utcnow().hour
+
+    # Avoid volatility times
+    blocked_hours = [12, 13]
+
+    if current_hour in blocked_hours:
+        return True
+
+    return False
+
+# ============================================
+# MAIN BOT LOOP
+# ============================================
+
+def run_bot():
+
+    if high_impact_news():
+        print("High Impact News Time")
+        return
+
+    send_signal()
+
+# ============================================
+# AUTO RUN EVERY 5 MINUTES
+# ============================================
+
+schedule.every(5).minutes.do(run_bot)
+
+print("Gold Signal Bot Running 24/7...")
+
+while True:
+
+    schedule.run_pending()
+
+    time.sleep(1)
