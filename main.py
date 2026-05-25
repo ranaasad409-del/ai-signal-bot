@@ -10,96 +10,95 @@ CHANNEL_ID = os.environ.get("CHAT_ID")
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-OFFSET = 0
-
-def check_for_commands():
-    """Polls Telegram for new messages sent directly to the bot."""
-    global OFFSET
+def get_live_gold_data():
+    """
+    Fetches the last 5 periods of 15-minute Gold data from Yahoo Finance API.
+    Returns the current price and a list of recent closing prices for trend calculation.
+    """
     try:
-        url = f"https://api.telegram.org/bot{BOT_TOKEN}/getUpdates?offset={OFFSET}&timeout=20"
-        response = requests.get(url, timeout=25).json()
+        # XAU/USD is tracked on Yahoo Finance under ticker 'GC=F' (Gold Futures)
+        url = "https://query1.financeapi.com/v8/finance/chart/GC=F?interval=15m&range=2d"
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
         
-        if not response.get("ok"):
-            return
-
-        for update in response.get("result", []):
-            OFFSET = update["update_id"] + 1
-            
-            # Check if the update contains a text message
-            if "message" in update and "text" in update["message"]:
-                text = update["message"]["text"]
-                chat_id = update["message"]["chat"]["id"]
-                
-                # Check if it's our target command
-                if text.startswith("/send_signal"):
-                    handle_signal_command(text, chat_id)
-                    
+        response = requests.get(url, headers=headers, timeout=15).json()
+        result = response["chart"]["result"][0]
+        
+        current_price = round(result["meta"]["regularMarketPrice"], 2)
+        closes = result["indicators"]["quote"][0]["close"]
+        
+        # Filter out any accidental null values from the data feed
+        clean_closes = [c for c in closes if c is not None]
+        
+        return current_price, clean_closes[-5:]
     except Exception as e:
-        logger.error(f"Error polling updates: {e}")
+        logger.error(f"Error fetching live gold price: {e}")
+        return None, []
 
-def handle_signal_command(text, chat_id):
-    """Parses the command inputs and posts the clean block to the channel."""
+def broadcast_signal(pair, direction, entry, tp1, tp2, tp3, sl):
+    """Formats and sends the signal straight to your Telegram channel."""
+    final_message = (
+        f"🔔 **{pair}** 🔔\n\n"
+        f"Direction: **{direction}**\n"
+        f"Entry Price:  `{entry:.2f}`\n\n"
+        f"TP1     `{tp1:.2f}`\n"
+        f"TP2     `{tp2:.2f}`\n"
+        f"TP3     `{tp3:.2f}`\n\n"
+        f"SL       `{sl:.2f}`"
+    )
+    
     try:
-        # Expected input: /send_signal EUR/USD SELL 1.1601 1.1581 1.1561 1.1541 1.1661
-        parts = text.split()
-        
-        # Validation: command + 7 arguments = 8 items total
-        if len(parts) < 8:
-            error_msg = (
-                "❌ **Missing variables!**\n\n"
-                "**Use exactly this format:**\n"
-                "`/send_signal [Pair] [Direction] [Entry] [TP1] [TP2] [TP3] [SL]`"
-            )
-            requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", 
-                          json={"chat_id": chat_id, "text": error_msg, "parse_mode": "Markdown"})
-            return
-
-        pair = parts[1].upper()
-        direction = parts[2].upper()
-        entry = parts[3]
-        tp1 = parts[4]
-        tp2 = parts[5]
-        tp3 = parts[6]
-        sl = parts[7]
-
-        # Structure the exact layout matching your original screenshot layout
-        final_signal_layout = (
-            f"🔔 **{pair}** 🔔\n\n"
-            f"Direction: **{direction}**\n"
-            f"Entry Price:  {entry}\n\n"
-            f"TP1     {tp1}\n"
-            f"TP2     {tp2}\n"
-            f"TP3     {tp3}\n\n"
-            f"SL       {sl}"
-        )
-
-        # Broadcast the beautiful message box to your channel destination
-        send_url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
         payload = {
             "chat_id": CHANNEL_ID,
-            "text": final_signal_layout,
+            "text": final_message,
             "parse_mode": "Markdown"
         }
-        
-        res = requests.post(send_url, json=payload).json()
-        
-        # Confirm back to you in your private chat that it posted successfully
-        if res.get("ok"):
-            requests.post(send_url, json={"chat_id": chat_id, "text": "✅ Signal posted to channel successfully!"})
-        else:
-            requests.post(send_url, json={"chat_id": chat_id, "text": f"❌ Failed to post. API Error: {res.get('description')}"})
-
+        requests.post(url, json=payload)
+        logger.info(f"Automated {direction} signal successfully dispatched for {pair}.")
     except Exception as e:
-        logger.error(f"Error handling command: {e}")
+        logger.error(f"Failed to transmit Telegram message: {e}")
 
 if __name__ == '__main__':
     if not BOT_TOKEN or not CHANNEL_ID:
-        logger.critical("Variables missing inside Railway panel!")
+        logger.critical("Missing core deployment environment variables in Railway!")
         exit(1)
         
-    logger.info("Manual Telegram Signal Bot is running online 24/7...")
+    logger.info("Fully Automated Gold AI Signal Bot is active...")
     
-    # An infinite loop that stays alive waiting for your inputs
+    last_signal_direction = None
+    
     while True:
-        check_for_commands()
-        time.sleep(1)
+        current_price, recent_closes = get_live_gold_data()
+        
+        if current_price and len(recent_closes) >= 3:
+            # Simple Trend Strategy: Calculate short-term moving average
+            avg_price = sum(recent_closes) / len(recent_closes)
+            
+            # Determine the market direction based on price action
+            if current_price > avg_price:
+                direction = "BUY"
+            else:
+                direction = "SELL"
+                
+            # Only send a signal when the trend switches directions (prevents spamming)
+            if direction != last_signal_direction:
+                last_signal_direction = direction
+                entry_price = current_price
+                
+                # Dynamic targets based on average Gold volatility metrics ($3, $6, $9 spreads)
+                if direction == "BUY":
+                    tp1 = entry_price + 3.0
+                    tp2 = entry_price + 6.0
+                    tp3 = entry_price + 9.0
+                    sl  = entry_price - 5.0
+                else:
+                    tp1 = entry_price - 3.0
+                    tp2 = entry_price - 6.0
+                    tp3 = entry_price - 9.0
+                    sl  = entry_price + 5.0
+                    
+                # Broadcast the completely hands-free signal package
+                broadcast_signal("XAU/USD (GOLD)", direction, entry_price, tp1, tp2, tp3, sl)
+                
+        # Scans the market data feed once every 5 minutes
+        time.sleep(300)
