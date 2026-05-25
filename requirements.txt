@@ -1,5 +1,3 @@
 python-telegram-bot==20.8
 pandas==2.2.2
 pandas-ta==0.3.14b0
-quotexpy==1.0.5
-
