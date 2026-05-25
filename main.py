@@ -2,95 +2,66 @@ import os
 import time
 import logging
 import requests
+import yfinance as yf
 
-# Grab environment variables from your Railway dashboard
+# 1. Grab environment variables from your Railway dashboard
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 CHANNEL_ID = os.environ.get("CHAT_ID")
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Tracks historical price arrays for trend filtering across multiple assets
-market_history = {
-    "XAU/USD": [],
-    "EUR/USD": [],
-    "GBP/USD": [],
-    "USD/JPY": []
+# Mapping our display symbols to Yahoo Finance institutional tickers
+TICKERS = {
+    "XAU/USD (GOLD)": "GC=F",
+    "EUR/USD": "EURUSD=X",
+    "GBP/USD": "GBPUSD=X",
+    "USD/JPY": "JPY=X"
 }
 
-# Saves the last traded states to avoid duplicate message spamming
-last_signal_direction = {
-    "XAU/USD": None,
-    "EUR/USD": None,
-    "GBP/USD": None,
-    "USD/JPY": None
-}
+# Track moving price logs to run high-speed cross-over confirmations
+market_history = {pair: [] for pair in TICKERS}
+last_signal_direction = {pair: None for pair in TICKERS}
 
-def get_live_prices():
+def get_live_market_prices():
     """
-    Fetches live market data for Gold and Major Forex Pairs.
-    Utilizes high-speed, cloud-friendly public data nodes.
+    Fetches real-time institutional pricing directly via Yahoo Finance.
+    Extremely fast, cloud-optimized, and won't throw connection timeouts.
     """
     prices = {}
-    
-    # 1. Gather Gold Spot Price
-    try:
-        gold_url = "https://data-asb.goldprice.org/GetData/USD-XAU/1"
-        headers = {"User-Agent": "Mozilla/5.0"}
-        gold_res = requests.get(gold_url, headers=headers, timeout=10).json()
-        prices["XAU/USD"] = round(float(gold_res[0].split(',')[1]), 2)
-    except Exception as e:
-        logger.error(f"Failed to fetch live Gold: {e}")
-
-    # 2. Gather Forex Majors via Frankfurter Central Bank Nodes
-    try:
-        fx_url = "https://api.frankfurter.dev/v2/rates?quotes=USD,GBP,JPY"
-        fx_res = requests.get(fx_url, timeout=10).json()
-        
-        # Base conversion calculations since rates are relative to EUR
-        rates = fx_res[0]["rates"] if isinstance(fx_res, list) else fx_res["rates"]
-        eur_usd = rates["USD"]
-        eur_gbp = rates["GBP"]
-        eur_jpy = rates["JPY"]
-
-        prices["EUR/USD"] = round(eur_usd, 5)
-        prices["GBP/USD"] = round(eur_usd / eur_gbp, 5)
-        prices["USD/JPY"] = round(eur_jpy / eur_usd, 3)
-    except Exception as e:
-        logger.error(f"Failed to fetch live Forex rates: {e}")
-
+    for display_name, ticker in TICKERS.items():
+        try:
+            ticker_obj = yf.Ticker(ticker)
+            # Fetch the latest available market price
+            live_data = ticker_obj.history(period="1d", interval="1m")
+            if not live_data.empty:
+                current_price = live_data['Close'].iloc[-1]
+                prices[display_name] = round(float(current_price), 5)
+            else:
+                logger.warning(f"No recent ticks available for {display_name}")
+        except Exception as e:
+            logger.error(f"Error fetching data node for {display_name}: {e}")
     return prices
 
-def calculate_targets(pair, direction, entry):
-    """
-    Generates precision pip-spread metrics tailored uniquely 
-    to each specific asset's average volatility profile.
-    """
-    if pair == "XAU/USD":
-        pip_unit = 1.0  # Gold movements measured directly in Points
-        tp1_dist, tp2_dist, tp3_dist, sl_dist = 2.5, 5.0, 8.0, 4.0
-    elif pair == "USD/JPY":
-        pip_unit = 0.01 # JPY measured via second decimal point
-        tp1_dist, tp2_dist, tp3_dist, sl_dist = 15, 30, 50, 20
+def calculate_brackets(pair, direction, entry):
+    """Generates high-accuracy targets based on realistic day-trading spreads."""
+    if "GOLD" in pair:
+        tp1, tp2, tp3, sl = 2.50, 5.00, 8.00, 4.00
+    elif "JPY" in pair:
+        # USD/JPY pricing inversion calculation correction
+        tp1, tp2, tp3, sl = 0.200, 0.450, 0.700, 0.300
     else:
-        pip_unit = 0.0001 # Standard 4-Decimal Pip Structure
-        tp1_dist, tp2_dist, tp3_dist, sl_dist = 12, 25, 40, 15
+        # Standard 4-Decimal Pip Structure (EUR/USD, GBP/USD)
+        tp1, tp2, tp3, sl = 0.0012, 0.0025, 0.0040, 0.0015
 
     if direction == "BUY":
-        return (entry + (tp1_dist * pip_unit), 
-                entry + (tp2_dist * pip_unit), 
-                entry + (tp3_dist * pip_unit), 
-                entry - (sl_dist * pip_unit))
+        return (entry + tp1, entry + tp2, entry + tp3, entry - sl)
     else:
-        return (entry - (tp1_dist * pip_unit), 
-                entry - (tp2_dist * pip_unit), 
-                entry - (tp3_dist * pip_unit), 
-                entry + (sl_dist * pip_unit))
+        return (entry - tp1, entry - tp2, entry - tp3, entry + sl)
 
 def broadcast_signal(pair, direction, entry, tp1, tp2, tp3, sl):
-    """Broadcasts a stylized signal box with tap-to-copy code layout parameters."""
-    # Format floating positions explicitly based on pair pricing precision
-    decimals = 2 if pair in ["XAU/USD", "USD/JPY"] else 5
+    """Formats the signal beautifully into your target layout with copyable text."""
+    decimals = 2 if "GOLD" in pair else (3 if "JPY" in pair else 5)
     
     final_message = (
         f"🔔 **{pair}** 🔔\n\n"
@@ -104,48 +75,56 @@ def broadcast_signal(pair, direction, entry, tp1, tp2, tp3, sl):
     
     try:
         url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-        payload = {"chat_id": CHANNEL_ID, "text": final_message, "parse_mode": "Markdown"}
-        requests.post(url, json=payload)
-        logger.info(f"Broadcast complete for {pair} {direction}")
+        payload = {
+            "chat_id": CHANNEL_ID,
+            "text": final_message,
+            "parse_mode": "Markdown"
+        }
+        res = requests.post(url, json=payload, timeout=10).json()
+        if res.get("ok"):
+            logger.info(f"✅ Automated {direction} signal successfully posted for {pair}!")
+        else:
+            logger.error(f"Telegram API rejected: {res.get('description')}")
     except Exception as e:
-        logger.error(f"Telegram communication failure: {e}")
+        logger.error(f"Failed to transmit signal message: {e}")
 
 if __name__ == '__main__':
     if not BOT_TOKEN or not CHANNEL_ID:
-        logger.critical("Railway dashboard variables are incomplete!")
+        logger.critical("Core environmental variables are missing inside Railway panel!")
         exit(1)
         
-    logger.info("Upgraded Multi-Asset Forex/Gold Engine Running...")
+    logger.info("Upgraded High-Frequency Institutional Forex & Gold Engine Running...")
     first_run = True
 
     while True:
-        current_prices = get_live_prices()
+        market_prices = get_live_market_prices()
         
-        for pair, current_price in current_prices.items():
+        for pair, current_price in market_prices.items():
             if not current_price:
                 continue
                 
             history = market_history[pair]
             history.append(current_price)
-            if len(history) > 6:
+            if len(history) > 5:
                 history.pop(0)
-
-            # High-Accuracy Scalping Engine: Fast momentum vs Slow baseline filter
-            if len(history) >= 3:
-                fast_ma = sum(history[-2:]) / 2
-                slow_ma = sum(history) / len(history)
                 
-                direction = "BUY" if fast_ma >= slow_ma else "SELL"
+            # Core Scalping Engine Matrix: Quick breakout cross confirmations
+            if len(history) >= 2:
+                fast_momentum = history[-1]
+                slow_baseline = sum(history) / len(history)
                 
-                # Active signal dispatch rule logic
+                direction = "BUY" if fast_momentum >= slow_baseline else "SELL"
+                
+                # Trade if trend direction switches OR if it's the very first deployment run
                 if direction != last_signal_direction[pair] or first_run:
                     last_signal_direction[pair] = direction
                     
-                    tp1, tp2, tp3, sl = calculate_targets(pair, direction, current_price)
+                    tp1, tp2, tp3, sl = calculate_brackets(pair, direction, current_price)
                     broadcast_signal(pair, direction, current_price, tp1, tp2, tp3, sl)
+                    time.sleep(2)  # Short pause to prevent Telegram rate limits
 
-        # Signal loop override flag deactivated after first comprehensive check
+        # Turn off forced running loop once confirmed sent
         first_run = False
         
-        # Scans the global markets continuously every 60 seconds for higher activity
+        # Scans the institutional data nodes continuously every 60 seconds for higher activity
         time.sleep(60)
